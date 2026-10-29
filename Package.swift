@@ -1,0 +1,17 @@
+// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+    name: "QSpaceLite",
+    platforms: [.macOS(.v13)],
+    targets: [
+        .executableTarget(
+            name: "QSpaceLite",
+            path: "Sources/QSpaceLite"
+        ),
+        .executableTarget(
+            name: "MapleInstaller",
+            path: "Sources/MapleInstaller"
+        )
+    ]
+)
