@@ -1111,6 +1111,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
     private var currentItem: FileItem?
 
     private(set) var isInlineEditing: Bool = false
+    private var isStartingEditing = false
     var onCommitRename: ((String) -> Void)?
     var onCancelRename: (() -> Void)?
 
@@ -1137,10 +1138,12 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         super.prepareForReuse()
         if isInlineEditing {
             isInlineEditing = false
+            isStartingEditing = false
             title.isEditable = false
             title.isSelectable = false
             title.drawsBackground = false
-            title.isBezeled = false
+            title.isBordered = false
+            title.layer?.borderWidth = 0
             title.delegate = nil
         }
     }
@@ -1158,40 +1161,56 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
     func startInlineEditing() {
         guard !isInlineEditing else { return }
         isInlineEditing = true
+        isStartingEditing = true
+
         title.isEditable = true
         title.isSelectable = true
         title.drawsBackground = true
         title.backgroundColor = .textBackgroundColor
         title.textColor = .labelColor
-        title.isBezeled = true
-        title.bezelStyle = .squareBezel
+        title.isBordered = true
         title.lineBreakMode = .byClipping
         title.cell?.isScrollable = true
-        title.delegate = self
+
+        title.wantsLayer = true
+        title.layer?.cornerRadius = 3
+        title.layer?.masksToBounds = true
+        title.layer?.borderWidth = 1
+        title.layer?.borderColor = NSColor.separatorColor.cgColor
+
         needsLayout = true
         window?.makeFirstResponder(title)
-        title.selectText(nil)
+        title.delegate = self
+
+        if let editor = title.currentEditor() as? NSTextView {
+            editor.textColor = .labelColor
+            editor.insertionPointColor = .labelColor
+            editor.drawsBackground = false
+            var attrs = editor.typingAttributes
+            attrs[.foregroundColor] = NSColor.labelColor
+            editor.typingAttributes = attrs
+            let fullText = title.stringValue
+            let isDir = currentItem?.isNavigable ?? false
+            let ext = (fullText as NSString).pathExtension
+            let length: Int
+            if isDir || ext.isEmpty || fullText.hasPrefix(".") {
+                length = fullText.count
+            } else {
+                length = (fullText as NSString).deletingPathExtension.count
+            }
+            editor.selectedRange = NSRange(location: 0, length: length)
+        }
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.isStartingEditing = false
             self.title.textColor = .labelColor
             if let editor = self.title.currentEditor() as? NSTextView {
                 editor.textColor = .labelColor
                 editor.insertionPointColor = .labelColor
-                editor.drawsBackground = false
                 var attrs = editor.typingAttributes
                 attrs[.foregroundColor] = NSColor.labelColor
                 editor.typingAttributes = attrs
-                let fullText = self.title.stringValue
-                let isDir = self.currentItem?.isNavigable ?? false
-                let ext = (fullText as NSString).pathExtension
-                let length: Int
-                if isDir || ext.isEmpty || fullText.hasPrefix(".") {
-                    length = fullText.count
-                } else {
-                    length = (fullText as NSString).deletingPathExtension.count
-                }
-                editor.selectedRange = NSRange(location: 0, length: length)
             }
         }
     }
@@ -1199,10 +1218,12 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
     func endInlineEditing(commit: Bool) {
         guard isInlineEditing else { return }
         isInlineEditing = false
+        isStartingEditing = false
         title.isEditable = false
         title.isSelectable = false
         title.drawsBackground = false
-        title.isBezeled = false
+        title.isBordered = false
+        title.layer?.borderWidth = 0
         title.lineBreakMode = .byTruncatingMiddle
         title.cell?.isScrollable = false
         title.delegate = nil
@@ -1244,9 +1265,8 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        if isInlineEditing {
-            endInlineEditing(commit: true)
-        }
+        guard !isStartingEditing, isInlineEditing else { return }
+        endInlineEditing(commit: true)
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {

@@ -830,6 +830,7 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
     private var model: FileItem?
 
     private(set) var isInlineEditing: Bool = false
+    private var isStartingEditing = false
     var onCommitRename: ((String) -> Void)?
     var onCancelRename: (() -> Void)?
 
@@ -917,10 +918,12 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
         super.prepareForReuse()
         if isInlineEditing {
             isInlineEditing = false
+            isStartingEditing = false
             label.isEditable = false
             label.isSelectable = false
             label.drawsBackground = false
             label.isBordered = false
+            label.layer?.borderWidth = 0
             label.delegate = nil
         }
         model = nil
@@ -944,6 +947,7 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
     func startInlineEditing() {
         guard !isInlineEditing else { return }
         isInlineEditing = true
+        isStartingEditing = true
         textBubble.isHidden = true
         label.isEditable = true
         label.isSelectable = true
@@ -953,30 +957,45 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
         label.isBordered = true
         label.lineBreakMode = .byClipping
         label.cell?.isScrollable = true
-        label.delegate = self
+
+        label.wantsLayer = true
+        label.layer?.cornerRadius = 3
+        label.layer?.masksToBounds = true
+        label.layer?.borderWidth = 1
+        label.layer?.borderColor = NSColor.separatorColor.cgColor
+
         view.window?.makeFirstResponder(label)
-        label.selectText(nil)
+        label.delegate = self
+
+        if let editor = label.currentEditor() as? NSTextView {
+            editor.textColor = .labelColor
+            editor.insertionPointColor = .labelColor
+            editor.drawsBackground = false
+            var attrs = editor.typingAttributes
+            attrs[.foregroundColor] = NSColor.labelColor
+            editor.typingAttributes = attrs
+            let fullText = label.stringValue
+            let isDir = model?.isNavigable ?? false
+            let ext = (fullText as NSString).pathExtension
+            let length: Int
+            if isDir || ext.isEmpty || fullText.hasPrefix(".") {
+                length = fullText.count
+            } else {
+                length = (fullText as NSString).deletingPathExtension.count
+            }
+            editor.selectedRange = NSRange(location: 0, length: length)
+        }
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.isStartingEditing = false
             self.label.textColor = .labelColor
             if let editor = self.label.currentEditor() as? NSTextView {
                 editor.textColor = .labelColor
                 editor.insertionPointColor = .labelColor
-                editor.drawsBackground = false
                 var attrs = editor.typingAttributes
                 attrs[.foregroundColor] = NSColor.labelColor
                 editor.typingAttributes = attrs
-                let fullText = self.label.stringValue
-                let isDir = self.model?.isNavigable ?? false
-                let ext = (fullText as NSString).pathExtension
-                let length: Int
-                if isDir || ext.isEmpty || fullText.hasPrefix(".") {
-                    length = fullText.count
-                } else {
-                    length = (fullText as NSString).deletingPathExtension.count
-                }
-                editor.selectedRange = NSRange(location: 0, length: length)
             }
         }
     }
@@ -984,10 +1003,12 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
     func endInlineEditing(commit: Bool) {
         guard isInlineEditing else { return }
         isInlineEditing = false
+        isStartingEditing = false
         label.isEditable = false
         label.isSelectable = false
         label.drawsBackground = false
         label.isBordered = false
+        label.layer?.borderWidth = 0
         label.lineBreakMode = .byTruncatingMiddle
         label.cell?.isScrollable = false
         label.delegate = nil
@@ -1022,9 +1043,8 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        if isInlineEditing {
-            endInlineEditing(commit: true)
-        }
+        guard !isStartingEditing, isInlineEditing else { return }
+        endInlineEditing(commit: true)
     }
 
     func configure(with item: FileItem, isPaneActive: Bool) {

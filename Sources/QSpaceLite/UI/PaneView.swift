@@ -920,6 +920,9 @@ final class PaneView: NSView {
                 return true
             case "f":
                 return false
+            case "w":
+                window?.performClose(nil)
+                return true
             case "[":
                 goBack()
                 return true

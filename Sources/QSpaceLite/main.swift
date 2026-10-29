@@ -426,6 +426,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         add(fileMenu, "刷新", #selector(refreshAction), "r", [.command])
         fileMenu.addItem(.separator())
         add(fileMenu, "显示简介", #selector(infoAction), "i", [.command])
+        fileMenu.addItem(.separator())
+        add(fileMenu, "关闭窗口", #selector(NSWindow.performClose(_:)), "w", [.command])
 
         // 编辑（走响应链，保证文本框里仍能正常拷贝粘贴）
         let editItem = NSMenuItem()
@@ -497,6 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         windowItem.submenu = windowMenu
         windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = mainMenu
