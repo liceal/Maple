@@ -65,6 +65,7 @@ final class ColumnBrowserView: NSView {
         scroll.drawsBackground = true
         scroll.backgroundColor = Theme.paneBackground
         scroll.scrollerStyle = .overlay
+        board.owner = self
         scroll.documentView = board
         addSubview(scroll)
 
@@ -340,12 +341,14 @@ final class ColumnBrowserView: NSView {
             layoutColumns()
             next.scrollToVisible(next.bounds)
             scroll.reflectScrolledClipView(scroll.contentView)
-        } else if item != nil {
+        } else if let item, !item.isNavigable {
             // 选中单文件：在列链最右侧追加一栏文件预览（仿访达分栏视图）。
-            syncPreview(scrollToVisible: true)
+            syncPreview(items: [item], scrollToVisible: true)
             activeColumn = index
         } else {
-            syncPreview()
+            currentItem = nil
+            clearPreview()
+            layoutColumns()
         }
 
         let urls = Set(selectedItems.isEmpty ? [item?.url].compactMap { $0 } : selectedItems.map { $0.url })
@@ -498,7 +501,7 @@ final class ColumnBrowserView: NSView {
             preview.configure(with: items)
             previewColumn = preview
             board.addSubview(preview)
-        } else if let item = items.first ?? currentItem, !item.isNavigable {
+        } else if let item = items.first, !item.isNavigable {
             let preview = FilePreviewColumn()
             preview.configure(with: item)
             previewColumn = preview
@@ -609,6 +612,18 @@ final class ColumnBrowserView: NSView {
     func scrollToTop() {
         columns.first?.selectFirstRow()
     }
+
+    /// 点击分栏右侧空白画布或列底部空白：清空选中并收起右侧预览（访达同款）
+    func handleBlankAreaClick() {
+        if activeColumn >= 0 && activeColumn < columns.count {
+            columns[activeColumn].deselectAll()
+        }
+        currentItem = nil
+        clearPreview()
+        layoutColumns()
+        onSelectionChange?(Set())
+        updateLocation()
+    }
 }
 
 // MARK: - 画布
@@ -616,6 +631,17 @@ final class ColumnBrowserView: NSView {
 /// 承载多列的翻转容器（作为横向滚动视图的 documentView）。
 private final class ColumnBoard: NSView {
     override var isFlipped: Bool { true }
+    weak var owner: ColumnBrowserView?
+
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        owner?.handleBlankAreaClick()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        owner?.handleBlankAreaClick()
+        return owner?.menuProvider?(nil)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         Theme.paneBackground.setFill()
@@ -679,7 +705,9 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.target = self
         table.doubleAction = #selector(handleDoubleClick)
         table.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
-        table.menuProvider = { [weak self] _ in self?.menuProvider?(self?.selectedItem) }
+        table.menuProvider = { [weak self] event in
+            self?.menuProvider?(event == nil ? nil : self?.selectedItem)
+        }
         table.onTriggerRename = { [weak self] row in self?.startRename(at: row) }
         table.isPointInName = { [weak self] row, point in
             guard let self, row >= 0, row < self.items.count else { return false }
@@ -740,6 +768,20 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
         if let column = table.tableColumns.first {
             column.width = max(40, scroll.contentSize.width)
         }
+    }
+
+    func deselectAll() {
+        table.deselectAll(nil)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        deselectAll()
+        super.mouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        deselectAll()
+        return menuProvider?(nil)
     }
 
     // MARK: - 数据
@@ -1107,14 +1149,10 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
 
     func isPointInName(_ pointInTable: NSPoint, in table: NSTableView) -> Bool {
         let local = convert(pointInTable, from: table)
-        let font = title.font ?? .systemFont(ofSize: 12.5)
-        let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
-        // 文件名区域：从 title.frame.minX - 4 开始（排除左侧图标），延伸至文本末尾 + 20pt 缓冲（排除右侧箭头与空白）
-        let nameRect = NSRect(x: title.frame.minX - 4,
-                              y: 0,
-                              width: max(40, textW + 20),
-                              height: bounds.height)
-        return nameRect.contains(local)
+        guard local.y >= 0 && local.y <= bounds.height else { return false }
+        if local.x < 25 { return false }
+        if !chevron.isHidden && local.x > chevron.frame.minX - 4 { return false }
+        return true
     }
 
     func startInlineEditing() {
@@ -1124,7 +1162,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         title.isSelectable = true
         title.drawsBackground = true
         title.backgroundColor = .textBackgroundColor
-        title.textColor = .controlTextColor
+        title.textColor = .labelColor
         title.isBezeled = true
         title.bezelStyle = .squareBezel
         title.lineBreakMode = .byClipping
@@ -1132,14 +1170,18 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         title.delegate = self
         needsLayout = true
         window?.makeFirstResponder(title)
+        title.selectText(nil)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.title.textColor = .controlTextColor
+            self.title.textColor = .labelColor
             if let editor = self.title.currentEditor() as? NSTextView {
-                editor.textColor = .controlTextColor
-                editor.insertionPointColor = .controlTextColor
+                editor.textColor = .labelColor
+                editor.insertionPointColor = .labelColor
                 editor.drawsBackground = false
+                var attrs = editor.typingAttributes
+                attrs[.foregroundColor] = NSColor.labelColor
+                editor.typingAttributes = attrs
                 let fullText = self.title.stringValue
                 let isDir = self.currentItem?.isNavigable ?? false
                 let ext = (fullText as NSString).pathExtension
@@ -1215,7 +1257,14 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
 
     private func updateColors() {
         if isInlineEditing {
-            title.textColor = .controlTextColor
+            title.textColor = .labelColor
+            if let editor = title.currentEditor() as? NSTextView {
+                editor.textColor = .labelColor
+                editor.insertionPointColor = .labelColor
+                var attrs = editor.typingAttributes
+                attrs[.foregroundColor] = NSColor.labelColor
+                editor.typingAttributes = attrs
+            }
             return
         }
         if backgroundStyle == .emphasized {
@@ -1282,6 +1331,21 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
 private final class ColumnScrollView: NSScrollView {
 
     weak var horizontalTarget: NSScrollView?
+
+    override func mouseDown(with event: NSEvent) {
+        if let browserColumn = superview as? BrowserColumn {
+            browserColumn.deselectAll()
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        if let browserColumn = superview as? BrowserColumn {
+            browserColumn.deselectAll()
+            return browserColumn.menuProvider?(nil)
+        }
+        return super.menu(for: event)
+    }
 
     override func scrollWheel(with event: NSEvent) {
         guard let horizontalTarget else {

@@ -634,17 +634,20 @@ final class KeyCollectionView: NSCollectionView {
             }
         }
 
+        if let path = clickedPath, wasAlreadySingleSelected, hitName, !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift) {
+            potentialRenamePath = path
+        }
+
         // 如果用户在已多选的项目中点击了其中某一项，且未按 ⌘ / ⇧：
         // 延迟至鼠标抬起时再单选它，以便在拖拽时能完整带出所有选中的文件
         if let path = clickedPath, selectionIndexPaths.contains(path), selectionIndexPaths.count > 1, !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift) {
             didClickOnMultiSelection = true
+        } else if wasAlreadySingleSelected {
+            // 已被单独选中的项再次单击：保留选中，使后续 mouseUp 能准确收到事件并触发重命名
+            window?.makeFirstResponder(self)
         } else {
             didClickOnMultiSelection = false
             super.mouseDown(with: event)
-        }
-
-        if let path = clickedPath, wasAlreadySingleSelected, hitName, !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift) {
-            potentialRenamePath = path
         }
     }
 
@@ -946,20 +949,24 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
         label.isSelectable = true
         label.drawsBackground = true
         label.backgroundColor = .textBackgroundColor
-        label.textColor = .controlTextColor
+        label.textColor = .labelColor
         label.isBordered = true
         label.lineBreakMode = .byClipping
         label.cell?.isScrollable = true
         label.delegate = self
         view.window?.makeFirstResponder(label)
+        label.selectText(nil)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.label.textColor = .controlTextColor
+            self.label.textColor = .labelColor
             if let editor = self.label.currentEditor() as? NSTextView {
-                editor.textColor = .controlTextColor
-                editor.insertionPointColor = .controlTextColor
+                editor.textColor = .labelColor
+                editor.insertionPointColor = .labelColor
                 editor.drawsBackground = false
+                var attrs = editor.typingAttributes
+                attrs[.foregroundColor] = NSColor.labelColor
+                editor.typingAttributes = attrs
                 let fullText = self.label.stringValue
                 let isDir = self.model?.isNavigable ?? false
                 let ext = (fullText as NSString).pathExtension

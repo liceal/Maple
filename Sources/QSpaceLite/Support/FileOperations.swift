@@ -214,25 +214,26 @@ enum FileOperations {
             return false
         }
 
-        // 3. 点前缀隐藏文件确认与自动开启显示隐藏文件提示
+        // 3. 点前缀隐藏文件确认与系统保留提示（访达同款）
         let oldName = item.name
         if trimmed.hasPrefix(".") && !oldName.hasPrefix(".") {
             if !AppSettings.showHidden {
                 let alert = NSAlert()
-                alert.messageText = "确定要使用以“.”开头的名称吗？"
-                alert.informativeText = "以“.”开头的名称是系统保留的隐藏文件。由于当前未开启“显示隐藏文件”，重命名后此文件将不再显示。\n\n是否开启“显示隐藏文件”以保持此文件可见？"
+                alert.messageText = "你不能使用以点“.”开头的名称，因为这些名称已被系统保留。请选取其他名称。"
                 alert.alertStyle = .warning
-                alert.addButton(withTitle: "开启显示并重命名")
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+                return false
+            } else {
+                let alert = NSAlert()
+                alert.messageText = "确定要使用以“.”开头的名称吗？"
+                alert.informativeText = "以“.”开头的名称会被系统视为隐藏文件。"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "使用“.”")
                 alert.addButton(withTitle: "取消")
-                alert.addButton(withTitle: "仍然重命名")
-
-                let res = alert.runModal()
-                if res == .alertFirstButtonReturn {
-                    AppSettings.showHidden = true
-                } else if res == .alertSecondButtonReturn {
+                if alert.runModal() != .alertFirstButtonReturn {
                     return false
                 }
-                // alertThirdButtonReturn: 保持关闭隐藏文件，直接重命名
             }
         }
 

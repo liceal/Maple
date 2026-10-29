@@ -1118,6 +1118,16 @@ final class KeyTableView: NSTableView {
     private var mouseDownPoint: NSPoint?
     private var didClickOnMultiSelection = false
 
+    override func setFrameSize(_ newSize: NSSize) {
+        var size = newSize
+        if let clip = enclosingScrollView?.contentView {
+            let visibleSize = clip.bounds.size
+            if size.width < visibleSize.width { size.width = visibleSize.width }
+            if size.height < visibleSize.height { size.height = visibleSize.height }
+        }
+        super.setFrameSize(size)
+    }
+
     override func keyDown(with event: NSEvent) {
         if keyHandler?(event) == true { return }
         // 按回车键：与访达一致进入重命名
@@ -1144,10 +1154,16 @@ final class KeyTableView: NSTableView {
 
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
-        if row >= 0, !selectedRowIndexes.contains(row) {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        if row >= 0 {
+            if !selectedRowIndexes.contains(row) {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            return menuProvider?(event) ?? super.menu(for: event)
+        } else {
+            // 右键点在空白处：访达同款清空选中，并展示文件夹右键菜单
+            deselectAll(nil)
+            return menuProvider?(nil) ?? super.menu(for: event)
         }
-        return menuProvider?(event) ?? super.menu(for: event)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1162,6 +1178,13 @@ final class KeyTableView: NSTableView {
         dragStartRow = row
         dragInitialSelection = selectedRowIndexes
 
+        // 点击空白处且未按 ⌘ / ⇧：与访达一致清空选中
+        if row < 0 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+            if !selectedRowIndexes.isEmpty {
+                deselectAll(nil)
+            }
+        }
+
         // 双击或多击：交由 doubleAction 打开文件
         if event.clickCount >= 2 {
             didClickOnMultiSelection = false
@@ -1173,17 +1196,20 @@ final class KeyTableView: NSTableView {
         let wasAlreadySingleSelected = (row >= 0 && selectedRowIndexes.count == 1 && selectedRowIndexes.contains(row))
         let hitName = isPointInName?(row, point) ?? true
 
+        if wasAlreadySingleSelected && hitName && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+            potentialRenameRow = row
+        }
+
         // 如果用户在已多选的多个项目中点击了其中某一项，且未按 ⌘ / ⇧：
         // 延迟至鼠标抬起时再单选它，以便在拖拽时能完整带出所有选中的文件
         if row >= 0 && selectedRowIndexes.contains(row) && selectedRowIndexes.count > 1 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
             didClickOnMultiSelection = true
+        } else if wasAlreadySingleSelected {
+            // 已被单独选中的项再次单击：保留选中，使后续 mouseUp 能准确收到事件并触发重命名
+            window?.makeFirstResponder(self)
         } else {
             didClickOnMultiSelection = false
             super.mouseDown(with: event)
-        }
-
-        if wasAlreadySingleSelected && hitName && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
-            potentialRenameRow = row
         }
     }
 
@@ -1409,6 +1435,16 @@ final class KeyOutlineView: NSOutlineView {
     private var mouseDownPoint: NSPoint?
     private var didClickOnMultiSelection = false
 
+    override func setFrameSize(_ newSize: NSSize) {
+        var size = newSize
+        if let clip = enclosingScrollView?.contentView {
+            let visibleSize = clip.bounds.size
+            if size.width < visibleSize.width { size.width = visibleSize.width }
+            if size.height < visibleSize.height { size.height = visibleSize.height }
+        }
+        super.setFrameSize(size)
+    }
+
     override func keyDown(with event: NSEvent) {
         if keyHandler?(event) == true { return }
         if event.keyCode == 36, selectedRow >= 0, selectedRowIndexes.count == 1 {
@@ -1434,10 +1470,16 @@ final class KeyOutlineView: NSOutlineView {
 
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
-        if row >= 0, !selectedRowIndexes.contains(row) {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        if row >= 0 {
+            if !selectedRowIndexes.contains(row) {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            return menuProvider?(event) ?? super.menu(for: event)
+        } else {
+            // 右键点在空白处：访达同款清空选中，并展示文件夹右键菜单
+            deselectAll(nil)
+            return menuProvider?(nil) ?? super.menu(for: event)
         }
-        return menuProvider?(event) ?? super.menu(for: event)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1451,6 +1493,13 @@ final class KeyOutlineView: NSOutlineView {
         let row = self.row(at: point)
         dragStartRow = row
         dragInitialSelection = selectedRowIndexes
+
+        // 点击空白处且未按 ⌘ / ⇧：与访达一致清空选中
+        if row < 0 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+            if !selectedRowIndexes.isEmpty {
+                deselectAll(nil)
+            }
+        }
 
         // 双击或多击：交由 doubleAction 打开文件
         if event.clickCount >= 2 {
@@ -1468,17 +1517,20 @@ final class KeyOutlineView: NSOutlineView {
         let wasAlreadySingleSelected = (row >= 0 && !isGroup && !clickedArrow && selectedRowIndexes.count == 1 && selectedRowIndexes.contains(row))
         let hitName = isPointInName?(row, point) ?? true
 
+        if wasAlreadySingleSelected && hitName && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+            potentialRenameRow = row
+        }
+
         // 如果用户在已多选的多个项目中点击了其中某一项，且未按 ⌘ / ⇧：
         // 延迟至鼠标抬起时再单选它，以便在拖拽时能完整带出所有选中的文件
         if row >= 0 && !isGroup && !clickedArrow && selectedRowIndexes.contains(row) && selectedRowIndexes.count > 1 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
             didClickOnMultiSelection = true
+        } else if wasAlreadySingleSelected {
+            // 已被单独选中的项再次单击：保留选中，使后续 mouseUp 能准确收到事件并触发重命名
+            window?.makeFirstResponder(self)
         } else {
             didClickOnMultiSelection = false
             super.mouseDown(with: event)
-        }
-
-        if wasAlreadySingleSelected && hitName && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
-            potentialRenameRow = row
         }
     }
 
@@ -1942,14 +1994,14 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
 
     func isPointInName(_ pointInOutline: NSPoint, in outline: NSOutlineView) -> Bool {
         let local = convert(pointInOutline, from: outline)
-        let font = title.font ?? .systemFont(ofSize: 12.5)
-        let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
-        // 文件名区域：从 title.frame.minX - 4 开始（排除左侧图标和展开三角），延伸至文本末尾 + 20pt 缓冲（排除右侧其他属性列与大片空白）
-        let nameRect = NSRect(x: title.frame.minX - 4,
-                              y: 0,
-                              width: max(40, textW + 20),
-                              height: bounds.height)
-        return nameRect.contains(local)
+        guard local.y >= 0 && local.y <= bounds.height else { return false }
+        // 排除左侧图标和展开三角（小于 nameTextX - 4，大约 38pt）
+        if local.x < FileListView.nameTextX - 4 { return false }
+        // 排除右侧其他属性列（大小/修改日期等）
+        let dx = convert(NSPoint.zero, to: owner).x
+        let nameRight = (owner?.columnLayout.nameRect.maxX ?? 300) - dx
+        if local.x > nameRight { return false }
+        return true
     }
 
     func startInlineEditing() {
@@ -1959,7 +2011,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         title.isSelectable = true
         title.drawsBackground = true
         title.backgroundColor = .textBackgroundColor
-        title.textColor = .controlTextColor
+        title.textColor = .labelColor
         title.isBezeled = true
         title.bezelStyle = .squareBezel
         title.lineBreakMode = .byClipping
@@ -1967,14 +2019,18 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         title.delegate = self
         updateFrames()
         window?.makeFirstResponder(title)
+        title.selectText(nil)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.title.textColor = .controlTextColor
+            self.title.textColor = .labelColor
             if let editor = self.title.currentEditor() as? NSTextView {
-                editor.textColor = .controlTextColor
-                editor.insertionPointColor = .controlTextColor
+                editor.textColor = .labelColor
+                editor.insertionPointColor = .labelColor
                 editor.drawsBackground = false
+                var attrs = editor.typingAttributes
+                attrs[.foregroundColor] = NSColor.labelColor
+                editor.typingAttributes = attrs
                 let fullText = self.title.stringValue
                 let isDir = self.item?.isNavigable ?? false
                 let ext = (fullText as NSString).pathExtension
@@ -2128,7 +2184,14 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
 
     private func updateColors() {
         if isInlineEditing {
-            title.textColor = .controlTextColor
+            title.textColor = .labelColor
+            if let editor = title.currentEditor() as? NSTextView {
+                editor.textColor = .labelColor
+                editor.insertionPointColor = .labelColor
+                var attrs = editor.typingAttributes
+                attrs[.foregroundColor] = NSColor.labelColor
+                editor.typingAttributes = attrs
+            }
             return
         }
         if backgroundStyle == .emphasized {
