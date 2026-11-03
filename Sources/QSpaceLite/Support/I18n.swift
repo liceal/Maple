@@ -66,6 +66,7 @@ public final class I18n {
         .en: [
             // 应用主菜单与通用
             "关于 Maple": "About Maple",
+            "检查更新…": "Check for Updates…",
             "设置与权限管理…": "Settings & Permissions…",
             "偏好设置…": "Preferences…",
             "隐藏 Maple": "Hide Maple",
@@ -225,6 +226,7 @@ public final class I18n {
         ],
         .zhHant: [
             "关于 Maple": "關於 Maple",
+            "检查更新…": "檢查更新…",
             "设置与权限管理…": "設定與權限管理…",
             "隐藏 Maple": "隱藏 Maple",
             "隐藏其他": "隱藏其他",
@@ -313,6 +315,7 @@ public final class I18n {
         ],
         .ja: [
             "关于 Maple": "Maple について",
+            "检查更新…": "アップデートを確認…",
             "设置与权限管理…": "設定と権限…",
             "隐藏 Maple": "Maple を隠す",
             "隐藏其他": "ほかを隠す",

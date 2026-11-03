@@ -61,6 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         buildWindow()
         reopenMainWindowAction()
         NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+
+        // 启动 3 秒后后台静默检查一次新版本（仅当有新版时温和提示）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            UpdateChecker.shared.checkForUpdates(isUserInitiated: false)
+        }
         FileSearchEngine.shared.loadIndex()
 
         // 确保在主运行循环完成启动阶段后，主窗口必定处于前台并可见
@@ -469,6 +474,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenu.addItem(withTitle: "关于 Maple".localized,
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
+        let updateMenuItem = appMenu.addItem(withTitle: "检查更新…".localized,
+                                             action: #selector(checkForUpdatesAction),
+                                             keyEquivalent: "")
+        updateMenuItem.target = self
         appMenu.addItem(.separator())
         add(appMenu, "设置与权限管理…", #selector(showSettingsAction), ",", [.command])
         appMenu.addItem(.separator())
@@ -769,6 +778,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsController?.show(relativeTo: window)
     }
 
+    /// 检查应用更新
+    @objc private func checkForUpdatesAction() {
+        UpdateChecker.shared.checkForUpdates(isUserInitiated: true)
+    }
+
     @objc private func connectServerAction() {
         showConnectServerWindow(initialEntry: nil)
     }
@@ -901,6 +915,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let connectServerItem = NSMenuItem(title: "连接服务器…", action: #selector(connectServerAction), keyEquivalent: "")
         connectServerItem.target = self
         menu.addItem(connectServerItem)
+
+        let updateItem = NSMenuItem(title: "检查更新…".localized, action: #selector(checkForUpdatesAction), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
 
         menu.addItem(.separator())
 
