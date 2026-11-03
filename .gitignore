@@ -1,0 +1,54 @@
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+
+# Build Outputs & Artifacts
+build/
+DerivedData/
+*.app
+*.dSYM
+*.ipa
+*.dmg
+*.pkg
+
+# Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcworkspace/contents.xcworkspacedata
+xcuserdata/
+*.xcscmblueprint
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary & Legacy Backups
+.legacy-src/
+.workbuddy/
+
+# Secrets & Local Configurations
+.env
+.env.*
+*.pem
+*.p12
+*.cer
+*.key
+*.mobileprovision
+*.provisionprofile
+*.orig
+*.rej
+
