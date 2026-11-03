@@ -1212,7 +1212,14 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
-        guard let node = item as? SidebarNode, !node.isGroup else { return nil }
+        guard let node = item as? SidebarNode else { return nil }
+        if node.isGroup {
+            let identifier = NSUserInterfaceItemIdentifier("SidebarGroupRowView")
+            let row = (outlineView.makeView(withIdentifier: identifier, owner: self) as? SidebarGroupRowView)
+                ?? SidebarGroupRowView()
+            row.identifier = identifier
+            return row
+        }
         let identifier = NSUserInterfaceItemIdentifier("SidebarRowView")
         let row = (outlineView.makeView(withIdentifier: identifier, owner: self) as? SidebarRowView)
             ?? SidebarRowView()
@@ -1284,6 +1291,25 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     }
 }
 
+// MARK: - 分组行（支持折叠箭头垂直居中优化）
+
+private final class SidebarGroupRowView: NSTableRowView {
+
+    override func layout() {
+        super.layout()
+
+        // 调整所有分组行（位置、iCloud、个人收藏、服务器、标签等）右侧折叠箭头的垂直居中位置
+        for sv in subviews {
+            if sv.identifier?.rawValue == "NSOutlineViewShowHideButtonKey" || sv is NSButton {
+                var f = sv.frame
+                // 系统默认 y=0 导致箭头位置偏上，将其下移使得箭头与左侧分组标题文字垂直光学居中
+                f.origin.y = 2.5
+                sv.frame = f
+            }
+        }
+    }
+}
+
 // MARK: - 单元格
 
 private final class SidebarGroupCell: NSTableCellView {
@@ -1303,7 +1329,7 @@ private final class SidebarGroupCell: NSTableCellView {
         plusButton.translatesAutoresizingMaskIntoConstraints = false
         plusButton.bezelStyle = .regularSquare
         plusButton.isBordered = false
-        plusButton.image = Theme.symbol("plus", size: 10, weight: .semibold)
+        plusButton.image = Theme.symbol("plus", size: 9.5, weight: .semibold)
         plusButton.contentTintColor = .secondaryLabelColor
         plusButton.toolTip = "添加标签"
         plusButton.target = self
@@ -1313,10 +1339,9 @@ private final class SidebarGroupCell: NSTableCellView {
 
         NSLayoutConstraint.activate([
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            field.trailingAnchor.constraint(lessThanOrEqualTo: plusButton.leadingAnchor, constant: -4),
-            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            plusButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            plusButton.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 4),
             plusButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             plusButton.widthAnchor.constraint(equalToConstant: 16),
             plusButton.heightAnchor.constraint(equalToConstant: 16)

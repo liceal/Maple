@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-VERSION="${1:-${MAPLE_VERSION:-1.0.1}}"
+VERSION="${1:-${MAPLE_VERSION:-1.0.2}}"
 echo "→ 准备构建 Maple v${VERSION} ..."
 
 echo "→ 正在编译 Release (arm64 + x86_64)..."
