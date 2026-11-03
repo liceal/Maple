@@ -34,7 +34,7 @@ final class ChromeBar: NSView {
         newFolderButton.toolTip = "新建文件夹"
 
         searchButton.image = Theme.symbol("magnifyingglass", size: 15)
-        searchButton.toolTip = "搜索文件（⌘F）"
+        searchButton.toolTip = "搜索文件（全局搜索 ⇧⌘F，当前位置 ⌘F）"
 
         moreButton.image = Theme.moreMenuImage()
         moreButton.toolTip = "更多：新建、排序、分组与显示选项"

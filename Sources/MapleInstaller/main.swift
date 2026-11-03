@@ -13,13 +13,76 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         if let icon = Bundle.main.image(forResource: "AppIcon") ?? NSImage(contentsOfFile: Bundle.main.bundlePath + "/Contents/Resources/AppIcon.icns") {
             NSApp.applicationIconImage = icon
         }
+        buildMenu()
         buildWindow()
         NSApp.activate(ignoringOtherApps: true)
+
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let chars = event.charactersIgnoringModifiers ?? ""
+            if flags == [.command] && (chars.lowercased() == "q" || event.keyCode == 12) {
+                NSApp.terminate(nil)
+                return nil
+            }
+            if flags == [.command] && (chars.lowercased() == "w" || event.keyCode == 13) {
+                self?.window?.performClose(nil)
+                return nil
+            }
+            return event
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateNow }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { false }
+
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
+
+    private func buildMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appItem.submenu = appMenu
+        let quitItem = appMenu.addItem(withTitle: "退出 Maple 安装向导", action: #selector(quitAction), keyEquivalent: "q")
+        quitItem.target = self
+
+        let fileItem = NSMenuItem()
+        mainMenu.addItem(fileItem)
+        let fileMenu = NSMenu(title: "文件")
+        fileItem.submenu = fileMenu
+        let closeItem = fileMenu.addItem(withTitle: "关闭窗口", action: #selector(closeAction), keyEquivalent: "w")
+        closeItem.target = self
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func quitAction() {
+        NSApp.terminate(nil)
+    }
+
+    @objc private func closeAction() {
+        window?.performClose(nil)
+    }
+
     private func buildWindow() {
+        guard window == nil else { return }
         let width: CGFloat = 620
         let height: CGFloat = 460
         let screen = NSScreen.main ?? NSScreen.screens.first
@@ -39,6 +102,8 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         stageView = InstallerStageView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         window.contentView = stageView
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
@@ -297,8 +362,16 @@ final class InstallerStageView: NSView {
         if let img = Bundle.main.image(forResource: name) { return img }
         let fallback = Bundle.main.bundlePath + "/Contents/Resources/" + name
         if let img = NSImage(contentsOfFile: fallback) { return img }
-        let devPath = "/Users/xianaolin/Desktop/Maple/Maple/Resources/" + name
-        return NSImage(contentsOfFile: devPath)
+        // 动态回退：尝试在当前工作目录或上级源码工程寻找资源，避免硬编码开发者个人路径
+        let currentDir = FileManager.default.currentDirectoryPath
+        let candidates = [
+            "\(currentDir)/Resources/\(name)",
+            "\(currentDir)/Maple/Resources/\(name)"
+        ]
+        for path in candidates {
+            if let img = NSImage(contentsOfFile: path) { return img }
+        }
+        return nil
     }
 
     // MARK: - 拖拽交互反馈
@@ -448,15 +521,33 @@ final class InstallerStageView: NSView {
 
             if let source = sourceAppURL {
                 do {
+                    // 若 Maple 当前正在运行，先终止旧进程，避免文件占用导致替换失败
+                    let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.workbuddy.maple")
+                        + NSRunningApplication.runningApplications(withBundleIdentifier: "com.workbuddy.qspacelite")
+                    for app in runningApps {
+                        app.terminate()
+                    }
+                    Thread.sleep(forTimeInterval: 0.3)
+
                     if FileManager.default.fileExists(atPath: targetURL.path) {
                         try? FileManager.default.removeItem(at: targetURL)
                     }
                     try FileManager.default.copyItem(at: source, to: targetURL)
-                    let process = Process()
-                    process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-                    process.arguments = ["-dr", "com.apple.quarantine", targetURL.path]
-                    try? process.run()
-                    process.waitUntilExit()
+
+                    // 彻底清除复制到 /Applications 后的 quarantine 与 fileprovider 属性
+                    let p1 = Process()
+                    p1.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+                    p1.arguments = ["-cr", targetURL.path]
+                    try? p1.run()
+                    p1.waitUntilExit()
+
+                    // 重签名以保证 Apple Silicon AMFI 完整性通过
+                    let p2 = Process()
+                    p2.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+                    p2.arguments = ["--force", "--deep", "--sign", "-", targetURL.path]
+                    try? p2.run()
+                    p2.waitUntilExit()
+
                     installSuccess = true
                 } catch {
                     print("Copy failed: \(error)")
@@ -478,9 +569,17 @@ final class InstallerStageView: NSView {
         if FileManager.default.fileExists(atPath: sibling.path) {
             return sibling
         }
-        let devURL = URL(fileURLWithPath: "/Users/xianaolin/Desktop/Maple/Maple.app")
-        if FileManager.default.fileExists(atPath: devURL.path) {
-            return devURL
+        // 动态回退：尝试在当前工作目录或上层工程目录寻找 Maple.app，避免硬编码绝对路径
+        let currentDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let candidates = [
+            currentDir.appendingPathComponent("Maple.app"),
+            currentDir.appendingPathComponent("Maple/Maple.app"),
+            currentDir.deletingLastPathComponent().appendingPathComponent("Maple.app")
+        ]
+        for candidate in candidates {
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
         }
         return nil
     }

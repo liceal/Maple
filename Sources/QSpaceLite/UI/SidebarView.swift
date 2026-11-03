@@ -68,6 +68,9 @@ final class SidebarView: NSView {
     /// 点击底栏设置齿轮按钮。
     var onOpenSettings: (() -> Void)?
 
+    /// 获取当前焦点窗格正在浏览的 URL，供刷新时安全恢复选中项，避免外置卷挂载时误选新卷
+    var currentURLProvider: (() -> URL?)?
+
     /// 列表顶部让出的高度（隐藏标题栏后，交通灯与工具条浮在侧栏上方，
     /// 列表内容要整体下移，避免第一组标题被挡住）。
     var topInset: CGFloat = 38 {
@@ -122,7 +125,7 @@ final class SidebarView: NSView {
         outline.indentationPerLevel = 12
         outline.autoresizesOutlineColumn = false
         outline.backgroundColor = .clear
-        outline.selectionHighlightStyle = .regular
+        outline.selectionHighlightStyle = .none
         outline.allowsEmptySelection = true
         outline.allowsMultipleSelection = false
         outline.registerForDraggedTypes([.fileURL])
@@ -483,6 +486,20 @@ final class SidebarView: NSView {
                 menu.addItem(remove)
             }
 
+            // 移到废纸篓与直接删除
+            if !node.isTrash {
+                menu.addItem(.separator())
+                let trashItem = NSMenuItem(title: "移到废纸篓", action: #selector(trashContextNodeClicked), keyEquivalent: "")
+                trashItem.target = self
+                trashItem.representedObject = url
+                menu.addItem(trashItem)
+
+                let deleteItem = NSMenuItem(title: "直接删除…", action: #selector(deleteContextNodeImmediatelyClicked), keyEquivalent: "")
+                deleteItem.target = self
+                deleteItem.representedObject = url
+                menu.addItem(deleteItem)
+            }
+
             menu.addItem(.separator())
             let refresh = NSMenuItem(title: "刷新", action: #selector(refreshClicked), keyEquivalent: "")
             refresh.target = self
@@ -507,11 +524,20 @@ final class SidebarView: NSView {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(volumesChanged), name: .tagsDidChange, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(volumesChanged), name: .favoritesDidChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(volumesChanged), name: .sidebarIconSizeDidChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(volumesChanged), name: .sidebarIconStyleDidChange, object: nil)
     }
 
     @objc private func volumesChanged() { reload() }
 
-    func reload() {
+    func reload(preservingCurrentURL currentURL: URL? = nil) {
+        let previousURL = currentURL ?? currentURLProvider?() ?? selectedNode()?.url
+        let previousTag = selectedNode()?.tag
+
+        let wasRestoring = isRestoringSelection
+        isRestoringSelection = true
+        defer { isRestoringSelection = wasRestoring }
+
         let home = FileManager.default.homeDirectoryForCurrentUser
         var list: [SidebarNode] = []
 
@@ -641,8 +667,17 @@ final class SidebarView: NSView {
         }
 
         nodes = list
+        outline.deselectAll(nil)
         outline.reloadData()
         for node in nodes { outline.expandItem(node) }
+
+        if let tag = previousTag {
+            select(tag: tag)
+        } else if let url = previousURL {
+            select(url: url)
+        } else {
+            outline.deselectAll(nil)
+        }
     }
 
     private static var favoriteEntries: [(FileManager.SearchPathDirectory, String)] {
@@ -702,9 +737,11 @@ final class SidebarView: NSView {
     // MARK: - 选中同步
 
     func select(url: URL) {
-        let target = url.standardizedFileURL.path
+        let wasRestoring = isRestoringSelection
         isRestoringSelection = true
-        defer { isRestoringSelection = false }
+        defer { isRestoringSelection = wasRestoring }
+
+        let target = url.standardizedFileURL.path
 
         for node in nodes {
             for child in node.children {
@@ -724,18 +761,21 @@ final class SidebarView: NSView {
 
     /// 让某个标签行成为选中项（切换窗格焦点时用）。
     func select(tag: String) {
+        let wasRestoring = isRestoringSelection
+        isRestoringSelection = true
+        defer { isRestoringSelection = wasRestoring }
+
         for node in nodes {
             for child in node.children where child.tag == tag {
                 let row = outline.row(forItem: child)
                 if row >= 0 {
-                    isRestoringSelection = true
                     outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                    isRestoringSelection = false
                     outline.scrollRowToVisible(row)
                 }
                 return
             }
         }
+        outline.deselectAll(nil)
     }
 
     // MARK: - 动作
@@ -834,6 +874,57 @@ final class SidebarView: NSView {
         guard let url = sender.representedObject as? URL else { return }
         AppSettings.removeFavorite(url)
         reload()
+    }
+
+    /// 边栏右键将文件夹移到废纸篓
+    @objc private func trashContextNodeClicked(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        let path = url.standardizedFileURL.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        if path == "/" || path == home || path == "/Applications" || path == "/System" {
+            let alert = NSAlert()
+            alert.messageText = "系统核心目录不能移到废纸篓"
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+
+        FileOperations.playTrashSound()
+        var resultingURL: NSURL?
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            if AppSettings.isFavorite(url) {
+                AppSettings.removeFavorite(url)
+            }
+            reload()
+            NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.runModal()
+        }
+    }
+
+    /// 边栏右键直接永久删除文件夹
+    @objc private func deleteContextNodeImmediatelyClicked(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        let path = url.standardizedFileURL.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        if path == "/" || path == home || path == "/Applications" || path == "/System" {
+            let alert = NSAlert()
+            alert.messageText = "系统核心目录不能直接删除"
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+
+        FileOperations.deleteImmediately(urls: [url], window: window) { [weak self] success in
+            if success {
+                if AppSettings.isFavorite(url) {
+                    AppSettings.removeFavorite(url)
+                }
+                self?.reload()
+            }
+        }
     }
 
     @objc private func settingsButtonClicked() {
@@ -1017,10 +1108,58 @@ final class SidebarView: NSView {
 /// 侧栏列表：右键时按被点中的节点动态生成菜单（点空白区域同样弹出侧栏操作菜单）。
 final class SidebarOutlineView: NSOutlineView {
     var menuProvider: ((SidebarNode?) -> NSMenu?)?
+    private var trackingArea: NSTrackingArea?
+
+    var hoveredRow: Int = -1 {
+        didSet {
+            if oldValue != hoveredRow {
+                if oldValue >= 0 && oldValue < numberOfRows {
+                    rowView(atRow: oldValue, makeIfNecessary: false)?.needsDisplay = true
+                }
+                if hoveredRow >= 0 && hoveredRow < numberOfRows {
+                    rowView(atRow: hoveredRow, makeIfNecessary: false)?.needsDisplay = true
+                }
+            }
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        self.trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let p = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: p)
+        if row >= 0, let node = item(atRow: row) as? SidebarNode, !node.isGroup {
+            hoveredRow = row
+        } else {
+            hoveredRow = -1
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hoveredRow = -1
+    }
+
+    override func reloadData() {
+        hoveredRow = -1
+        super.reloadData()
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
-        let row = row(at: point)
+        let row = self.row(at: point)
         let node = row >= 0 ? (item(atRow: row) as? SidebarNode) : nil
         return menuProvider?(node) ?? super.menu(for: event)
     }
@@ -1054,6 +1193,15 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         (item as? SidebarNode)?.isGroup == true ? 26 : 24
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        guard let node = item as? SidebarNode, !node.isGroup else { return nil }
+        let identifier = NSUserInterfaceItemIdentifier("SidebarRowView")
+        let row = (outlineView.makeView(withIdentifier: identifier, owner: self) as? SidebarRowView)
+            ?? SidebarRowView()
+        row.identifier = identifier
+        return row
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -1101,6 +1249,7 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         let urls = FileOperations.readURLs(from: info)
         guard !urls.isEmpty else { return false }
         if node.isTrash {
+            FileOperations.playTrashSound()
             NSWorkspace.shared.recycle(urls) { _, _ in
                 NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
             }
@@ -1108,6 +1257,7 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         }
         let isCopy = FileOperations.shouldCopy(for: info, destination: dest)
         FileOperations.transfer(urls: urls, to: dest, isCopy: isCopy)
+        FileOperations.playFileAddedSound()
         NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
         return true
     }
@@ -1170,39 +1320,26 @@ private final class SidebarEjectButton: NSButton {
         bezelStyle = .regularSquare
         isBordered = false
         title = ""
-        image = Theme.symbol("eject.fill", size: 10, weight: .medium) ?? NSImage(systemSymbolName: "eject.fill", accessibilityDescription: "推出")
+        image = Theme.symbol("eject.fill", size: 8.5, weight: .medium) ?? NSImage(systemSymbolName: "eject.fill", accessibilityDescription: "推出")
         imagePosition = .imageOnly
         imageScaling = .scaleProportionallyDown
         wantsLayer = true
-        layer?.cornerRadius = 4
+        layer?.cornerRadius = 3.5
         updateAppearance()
     }
 
     private func updateAppearance() {
-        if isRowSelected {
-            if isHighlighted {
-                contentTintColor = .white
-                layer?.backgroundColor = NSColor.white.withAlphaComponent(0.35).cgColor
-            } else if isHovered {
-                contentTintColor = .white
-                layer?.backgroundColor = NSColor.white.withAlphaComponent(0.22).cgColor
-            } else {
-                contentTintColor = NSColor.white.withAlphaComponent(0.7)
-                layer?.backgroundColor = NSColor.clear.cgColor
-            }
+        if isHighlighted {
+            contentTintColor = .labelColor
+            layer?.backgroundColor = NSColor.separatorColor.cgColor
+        } else if isHovered {
+            // 鼠标移上去：颜色变深，带精致的微灰背景反馈（完全包含在浅灰色行背景内）
+            contentTintColor = .labelColor
+            layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
         } else {
-            if isHighlighted {
-                contentTintColor = .labelColor
-                layer?.backgroundColor = NSColor.separatorColor.cgColor
-            } else if isHovered {
-                // 鼠标移上去：颜色变深，带精致的微灰背景反馈
-                contentTintColor = .labelColor
-                layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
-            } else {
-                // 默认状态：颜色更浅更干净
-                contentTintColor = NSColor.secondaryLabelColor.withAlphaComponent(0.5)
-                layer?.backgroundColor = NSColor.clear.cgColor
-            }
+            // 默认状态：颜色更浅更干净
+            contentTintColor = NSColor.secondaryLabelColor.withAlphaComponent(0.6)
+            layer?.backgroundColor = NSColor.clear.cgColor
         }
     }
 
@@ -1243,6 +1380,8 @@ private final class SidebarItemCell: NSTableCellView {
     private let title = NSTextField(labelWithString: "")
     private let statusDot = NSView()
     private let ejectButton = SidebarEjectButton()
+    private var iconWidthConstraint: NSLayoutConstraint?
+    private var iconHeightConstraint: NSLayoutConstraint?
 
     var onEject: (() -> Void)?
 
@@ -1280,11 +1419,17 @@ private final class SidebarItemCell: NSTableCellView {
         ejectButton.isHidden = true
         addSubview(ejectButton)
 
+        let dim = AppSettings.sidebarIconSize.dimension
+        let w = icon.widthAnchor.constraint(equalToConstant: dim)
+        let h = icon.heightAnchor.constraint(equalToConstant: dim)
+        iconWidthConstraint = w
+        iconHeightConstraint = h
+
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 17),
-            icon.heightAnchor.constraint(equalToConstant: 17),
+            w,
+            h,
 
             title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1294,10 +1439,10 @@ private final class SidebarItemCell: NSTableCellView {
             statusDot.widthAnchor.constraint(equalToConstant: 7),
             statusDot.heightAnchor.constraint(equalToConstant: 7),
 
-            ejectButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            ejectButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
             ejectButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            ejectButton.widthAnchor.constraint(equalToConstant: 18),
-            ejectButton.heightAnchor.constraint(equalToConstant: 18),
+            ejectButton.widthAnchor.constraint(equalToConstant: 16),
+            ejectButton.heightAnchor.constraint(equalToConstant: 15),
 
             title.trailingAnchor.constraint(lessThanOrEqualTo: ejectButton.leadingAnchor, constant: -4)
         ])
@@ -1310,6 +1455,9 @@ private final class SidebarItemCell: NSTableCellView {
     }
 
     func configure(with node: SidebarNode) {
+        let dim = AppSettings.sidebarIconSize.dimension
+        iconWidthConstraint?.constant = dim
+        iconHeightConstraint?.constant = dim
         title.stringValue = node.title
 
         let canEject = node.isEjectableVolume || node.isMountedNetworkVolume
@@ -1318,12 +1466,6 @@ private final class SidebarItemCell: NSTableCellView {
 
         statusDot.isHidden = canEject || !node.isMountedNetworkVolume
 
-        if node.kind == .server {
-            icon.image = Theme.serverIcon(urlString: node.serverEntry?.urlString ?? "", size: 17)
-            icon.contentTintColor = nil
-            title.textColor = .labelColor
-            return
-        }
         if node.kind == .connectServer {
             icon.image = Theme.symbol("plus.circle", size: 13, weight: .medium)
             icon.contentTintColor = .secondaryLabelColor
@@ -1337,7 +1479,19 @@ private final class SidebarItemCell: NSTableCellView {
             icon.contentTintColor = nil
             return
         }
-        if let url = node.url, let special = Theme.specialFolderIcon(for: url, size: 17) {
+
+        if AppSettings.sidebarIconStyle == .minimalist {
+            icon.image = Theme.minimalistSidebarIcon(for: node, size: dim)
+            icon.contentTintColor = .secondaryLabelColor
+            return
+        }
+
+        if node.kind == .server {
+            icon.image = Theme.serverIcon(urlString: node.serverEntry?.urlString ?? "", size: dim)
+            icon.contentTintColor = nil
+            return
+        }
+        if let url = node.url, let special = Theme.specialFolderIcon(for: url, size: dim) {
             icon.image = special
             icon.contentTintColor = nil
             return
@@ -1348,11 +1502,73 @@ private final class SidebarItemCell: NSTableCellView {
             return
         }
         if node.symbol == "house.fill" {
-            icon.image = Theme.colorfulHomeIcon(size: 17)
+            icon.image = Theme.colorfulHomeIcon(size: dim)
             icon.contentTintColor = nil
             return
         }
         icon.image = Theme.symbol(node.symbol, size: 13)
         icon.contentTintColor = .controlAccentColor
+    }
+}
+
+// MARK: - 侧栏高保真极简浅灰圆角选中行与悬浮反馈
+
+private final class SidebarRowView: NSTableRowView {
+
+    override var interiorBackgroundStyle: NSView.BackgroundStyle {
+        // 返回 .normal，防止系统将选中行的文字强制反白，保持极简深色文字与浅灰底
+        .normal
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        needsDisplay = true
+    }
+
+    private var isHovered: Bool {
+        guard let outline = (superview as? SidebarOutlineView)
+            ?? (enclosingScrollView?.documentView as? SidebarOutlineView) else {
+            return false
+        }
+        let myRow = outline.row(for: self)
+        return myRow >= 0 && outline.hoveredRow == myRow
+    }
+
+    override var isSelected: Bool {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        // selectionHighlightStyle 为 .none 时不调用；留空防止系统原生蓝色绘制
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        let selectionRect = bounds.insetBy(dx: 5, dy: 1)
+        if isSelected {
+            let path = NSBezierPath(roundedRect: selectionRect, xRadius: 6, yRadius: 6)
+            let fillColor = NSColor(name: nil) { appearance in
+                if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                    return NSColor(white: 1.0, alpha: 0.18)
+                } else {
+                    return NSColor(white: 0.0, alpha: 0.12)
+                }
+            }
+            fillColor.setFill()
+            path.fill()
+        } else if isHovered {
+            let path = NSBezierPath(roundedRect: selectionRect, xRadius: 6, yRadius: 6)
+            let fillColor = NSColor(name: nil) { appearance in
+                if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                    return NSColor(white: 1.0, alpha: 0.09)
+                } else {
+                    return NSColor(white: 0.0, alpha: 0.05)
+                }
+            }
+            fillColor.setFill()
+            path.fill()
+        }
     }
 }

@@ -7,6 +7,9 @@ import Quartz
 /// 系统默认只有「可接受首次点击」的控件才会顺带切换 key window，点空白处常常只激活
 /// App 而不切窗口，所以这里在派发事件前先自己抢焦点。
 final class MainWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown, .rightMouseDown:
@@ -48,24 +51,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: 启动
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        AppSettings.applyAppearance()
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
            let iconImage = NSImage(contentsOf: iconURL) {
             NSApp.applicationIconImage = iconImage
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(handleLanguageDidChange), name: .languageDidChange, object: nil)
         buildMenu()
         buildWindow()
-        NSApp.activate(ignoringOtherApps: true)
+        reopenMainWindowAction()
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
         FileSearchEngine.shared.loadIndex()
+
+        // 确保在主运行循环完成启动阶段后，主窗口必定处于前台并可见
+        DispatchQueue.main.async { [weak self] in
+            self?.reopenMainWindowAction()
+        }
+
+        // 全局键盘监听：支持 ⌘Q 立即退出，以及 Windows 习惯的 Ctrl+Z / Ctrl+Shift+Z 文本与文件撤销与重做
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let chars = event.charactersIgnoringModifiers ?? ""
+            if flags == [.command] && (chars.lowercased() == "q" || event.keyCode == 12) {
+                NSApp.terminate(nil)
+                return nil
+            }
+            if flags == [.control] && chars == "z" {
+                if let responder = NSApp.keyWindow?.firstResponder,
+                   (responder is NSTextView || responder is NSTextField) {
+                    if NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
+                        return nil
+                    }
+                }
+                self?.workspace?.undoAction()
+                return nil
+            } else if flags == [.control, .shift] && chars == "z" {
+                if let responder = NSApp.keyWindow?.firstResponder,
+                   (responder is NSTextView || responder is NSTextField) {
+                    if NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) {
+                        return nil
+                    }
+                }
+                self?.workspace?.redoAction()
+                return nil
+            }
+            return event
+        }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateNow }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { false }
+
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        reopenMainWindowAction()
+        return true
+    }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { window?.makeKeyAndOrderFront(nil) }
+        reopenMainWindowAction()
         return true
+    }
+
+    @objc private func reopenMainWindowAction() {
+        if window == nil {
+            buildWindow()
+        }
+        guard let window else { return }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -84,21 +146,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// 恢复上次窗口的位置与大小；窗口必须落在某个屏幕的可见范围内，否则用默认位置。
     private func restoreWindowFrame(_ window: NSWindow, fallback: NSRect) {
         guard let saved = AppSettings.windowFrame else {
-            window.setFrame(fallback, display: false)
+            window.setFrame(fallback, display: true)
             return
         }
         let rect = NSRectFromString(saved)
         guard rect.width >= 700, rect.height >= 420 else {
-            window.setFrame(fallback, display: false)
+            window.setFrame(fallback, display: true)
             return
         }
         let onScreen = NSScreen.screens.contains { $0.visibleFrame.intersects(rect) }
-        window.setFrame(onScreen ? rect : fallback, display: false)
+        window.setFrame(onScreen ? rect : fallback, display: true)
     }
 
     // MARK: 窗口
 
     private func buildWindow() {
+        guard window == nil else { return }
         // 不使用 setFrameAutosaveName：它会连窗口所属 Space 一起保存/恢复，
         // 导致窗口被还原到不可见的桌面。这里每次按当前主屏可见区定位。
         let screen = NSScreen.main ?? NSScreen.screens.first
@@ -114,8 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                             backing: .buffered,
                             defer: false)
+        window.appearance = NSApp.appearance
         window.title = "Maple"
-        // 与 QSpace 一致的「无标题栏」外观：不显示窗口标题，标题栏透明，
+        // 与原生规范一致的「无标题栏」外观：不显示窗口标题，标题栏透明，
         // 侧栏与窗格一直画到窗口顶端，交通灯直接落在侧栏上，视觉上连成一体。
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -131,6 +195,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let workspace = WorkspaceArea()
         self.sidebar = sidebar
         self.workspace = workspace
+
+        sidebar.currentURLProvider = { [weak self] in
+            self?.workspace?.focusedPane?.currentURL
+        }
 
         sidebar.onSelect = { [weak self] url in
             self?.workspace?.openInFocusedPane(url)
@@ -179,7 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 显式约束布局（不用 NSSplitView，避免左侧视图按固有宽度挤压工作区）
         // 容器用不透明垫底，避免窗口材质把桌面透进来（表现为窗口逐渐发白）
-        let container = OpaqueBackgroundView()
+        let container = OpaqueBackgroundView(frame: frame)
+        container.autoresizingMask = [.width, .height]
         container.color = Theme.paneBackground
         self.container = container
         sidebar.translatesAutoresizingMaskIntoConstraints = false
@@ -239,11 +308,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         window.contentView = container
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         // 兜底：万一窗口被系统还原成异常尺寸，重新按当前屏幕摆正
         if window.frame.width < 400 || window.frame.height < 300 {
             window.setFrame(frame, display: true)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
 
         // 首屏选中当前目录对应的侧栏条目
         if let pane = workspace.focusedPane {
@@ -396,25 +466,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
         appItem.submenu = appMenu
-        appMenu.addItem(withTitle: "关于 Maple",
+        appMenu.addItem(withTitle: "关于 Maple".localized,
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
         appMenu.addItem(.separator())
         add(appMenu, "设置与权限管理…", #selector(showSettingsAction), ",", [.command])
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "隐藏 Maple", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        let hideOthers = appMenu.addItem(withTitle: "隐藏其他",
+        appMenu.addItem(withTitle: "隐藏 Maple".localized, action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: "隐藏其他".localized,
                                          action: #selector(NSApplication.hideOtherApplications(_:)),
                                          keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "退出 Maple", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quitItem = appMenu.addItem(withTitle: "退出 Maple".localized, action: #selector(quitAppAction), keyEquivalent: "q")
+        quitItem.target = self
 
         // 文件
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
-        let fileMenu = NSMenu(title: "文件")
+        let fileMenu = NSMenu(title: "文件".localized)
         fileItem.submenu = fileMenu
+        add(fileMenu, "新建窗口", #selector(reopenMainWindowAction), "n", [.command])
         add(fileMenu, "新建文件夹", #selector(newFolderAction), "n", [.command, .shift])
         add(fileMenu, "重命名", #selector(renameAction), "", [])
         add(fileMenu, "移到废纸篓", #selector(trashAction), "\u{8}", [.command])
@@ -429,21 +501,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fileMenu.addItem(.separator())
         add(fileMenu, "关闭窗口", #selector(NSWindow.performClose(_:)), "w", [.command])
 
-        // 编辑（走响应链，保证文本框里仍能正常拷贝粘贴）
+        // 编辑（走响应链，保证文本框里仍能正常撤销/重做/拷贝粘贴）
         let editItem = NSMenuItem()
         mainMenu.addItem(editItem)
-        let editMenu = NSMenu(title: "编辑")
+        let editMenu = NSMenu(title: "编辑".localized)
         editItem.submenu = editMenu
-        editMenu.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "全选", action: #selector(NSStandardKeyBindingResponding.selectAll(_:)), keyEquivalent: "a")
+        let undoItem = editMenu.addItem(withTitle: "撤销".localized, action: #selector(undoMenuAction), keyEquivalent: "z")
+        undoItem.target = self
+        let redoItem = editMenu.addItem(withTitle: "重做".localized, action: #selector(redoMenuAction), keyEquivalent: "z")
+        redoItem.target = self
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "剪切".localized, action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "拷贝".localized, action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴".localized, action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "全选".localized, action: #selector(NSStandardKeyBindingResponding.selectAll(_:)), keyEquivalent: "a")
 
         // 显示
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
-        let viewMenu = NSMenu(title: "显示")
+        let viewMenu = NSMenu(title: "显示".localized)
         viewItem.submenu = viewMenu
-        add(viewMenu, "搜索文件…", #selector(searchAction), "f", [.command])
+        add(viewMenu, "在当前位置搜索…", #selector(searchCurrentLocationAction), "f", [.command])
+        add(viewMenu, "全局搜索…", #selector(searchGlobalAction), "f", [.command, .shift])
         viewMenu.addItem(.separator())
         add(viewMenu, "以列表显示", #selector(listModeAction), "1", [.command])
         add(viewMenu, "以图标显示", #selector(iconModeAction), "2", [.command])
@@ -456,7 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 前往
         let goItem = NSMenuItem()
         mainMenu.addItem(goItem)
-        let goMenu = NSMenu(title: "前往")
+        let goMenu = NSMenu(title: "前往".localized)
         goItem.submenu = goMenu
         add(goMenu, "上一层", #selector(goUpAction), "\u{1e}", [.command])
         add(goMenu, "后退", #selector(goBackAction), "[", [.command])
@@ -464,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         add(goMenu, "编辑路径", #selector(editPathAction), "l", [.command])
         goMenu.addItem(.separator())
         for (title, key) in [("主目录", "h"), ("桌面", "d"), ("下载", "l"), ("应用程序", "a")] {
-            let item = NSMenuItem(title: title, action: #selector(goToStandardFolder(_:)), keyEquivalent: key)
+            let item = NSMenuItem(title: title.localized, action: #selector(goToStandardFolder(_:)), keyEquivalent: key)
             item.target = self
             item.keyEquivalentModifierMask = [.command, .shift]
             item.representedObject = key
@@ -476,7 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 窗格
         let paneItem = NSMenuItem()
         mainMenu.addItem(paneItem)
-        let paneMenu = NSMenu(title: "窗格")
+        let paneMenu = NSMenu(title: "窗格".localized)
         paneItem.submenu = paneMenu
         add(paneMenu, "下一个窗格", #selector(nextPaneAction), "\u{9}", [.command])
         paneMenu.addItem(.separator())
@@ -495,14 +575,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 窗口
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
-        let windowMenu = NSMenu(title: "窗口")
+        let windowMenu = NSMenu(title: "窗口".localized)
         windowItem.submenu = windowMenu
-        windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
-        windowMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "最小化".localized, action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "缩放".localized, action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "关闭窗口".localized, action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func handleLanguageDidChange() {
+        buildMenu()
+        updateLayoutButton()
     }
 
     /// ⌥⌘1–4 给最常用的四种布局，其余布局只能从菜单或工具条图标条里选。
@@ -522,7 +607,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                      _ action: Selector,
                      _ key: String,
                      _ modifiers: NSEvent.ModifierFlags) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        let item = NSMenuItem(title: title.localized, action: action, keyEquivalent: key)
         item.target = self
         if !modifiers.isEmpty { item.keyEquivalentModifierMask = modifiers }
         menu.addItem(item)
@@ -531,11 +616,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: 动作
 
+    @objc private func quitAppAction() {
+        NSApp.terminate(nil)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(quitAppAction) || menuItem.action == #selector(NSApplication.terminate(_:)) {
+            return true
+        }
+        return true
+    }
+
     private func pane() -> PaneView? { workspace?.focusedPane }
 
     @objc private func newFolderAction() { pane()?.createFolder() }
     @objc private func renameAction() { pane()?.renameSelected() }
     @objc private func trashAction() { pane()?.trashSelected() }
+
+    @objc private func undoMenuAction() {
+        if let responder = NSApp.keyWindow?.firstResponder,
+           (responder is NSTextView || responder is NSTextField) {
+            if NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
+                return
+            }
+        }
+        workspace?.undoAction()
+    }
+
+    @objc private func redoMenuAction() {
+        if let responder = NSApp.keyWindow?.firstResponder,
+           (responder is NSTextView || responder is NSTextField) {
+            if NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) {
+                return
+            }
+        }
+        workspace?.redoAction()
+    }
     @objc private func copyPathAction() { pane()?.copyPath() }
     @objc private func terminalAction() { pane()?.openInTerminal() }
     @objc private func revealAction() { pane()?.revealInFinder() }
@@ -545,9 +661,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func goBackAction() { pane()?.goBack() }
     @objc private func goForwardAction() { pane()?.goForward() }
     @objc private func editPathAction() { pane()?.beginEditingPath() }
+    @objc private func searchGlobalAction() {
+        guard let window else { return }
+        openSearchPanel(in: window, isCurrentFolder: false)
+    }
+
+    @objc private func searchCurrentLocationAction() {
+        guard let window else { return }
+        openSearchPanel(in: window, isCurrentFolder: true)
+    }
+
     @objc private func searchAction() {
-        guard let button = searchButton else { return }
-        showSearchPanel(button)
+        searchGlobalAction()
     }
 
     @objc private func listModeAction() { pane()?.viewMode = .list }
@@ -586,15 +711,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showDisplayOptions(anchoredTo: moreButton)
     }
 
-    /// 顶部放大镜：打开搜索浮层，结果反馈到当前焦点窗格（保留上一次搜索状态，不重置）。
-    @objc private func showSearchPanel(_ sender: NSButton) {
-        guard let window else { return }
+    /// 统一打开搜索浮层，并设定搜索范围（保留上一次搜索状态，不重置）。
+    private func openSearchPanel(in window: NSWindow, isCurrentFolder: Bool) {
         if let controller = searchController {
             if controller.isVisible {
-                controller.close()
+                controller.setScope(isCurrentFolder: isCurrentFolder)
                 return
             }
-            controller.show(anchoredTo: sender, in: window)
+            controller.setScope(isCurrentFolder: isCurrentFolder)
+            controller.show(anchoredTo: searchButton, in: window)
             return
         }
         let controller = SearchPanelController()
@@ -603,7 +728,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         controller.onPick = { [weak self] url in
             guard let self else { return }
-            // 结果反馈到当前焦点窗格（保留 searchController 实例，下次打开继续保持上次搜索状态）
             if let pane = self.workspace?.focusedPane ?? self.workspace?.panes.first {
                 pane.activate()
                 pane.reveal(url)
@@ -613,7 +737,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.showSettingsAction()
         }
         searchController = controller
-        controller.show(anchoredTo: sender, in: window)
+        controller.setScope(isCurrentFolder: isCurrentFolder)
+        controller.show(anchoredTo: searchButton, in: window)
+    }
+
+    /// 顶部放大镜按钮点击
+    @objc private func showSearchPanel(_ sender: NSButton) {
+        guard let window else { return }
+        if let controller = searchController, controller.isVisible {
+            controller.close()
+            return
+        }
+        openSearchPanel(in: window, isCurrentFolder: false)
     }
 
     /// 打开设置与权限管理窗口（支持重置被误拒的系统文件夹权限并立即重新触发授权弹窗）。

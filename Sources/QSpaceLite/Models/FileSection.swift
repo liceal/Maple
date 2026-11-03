@@ -3,13 +3,14 @@ import Foundation
 /// 列表视图可显示的列（名称列恒显，不在这里）。
 /// 顺序即表头里从左到右的排列顺序。
 enum ListColumn: String, CaseIterable {
-    case created, modified, size, kind, owner, group, duration
+    case path, created, modified, size, kind, owner, group, duration
 
     /// 内置默认列（与访达一致：修改日期 / 大小 / 种类）。
     static let builtInDefaults = ["modified", "size", "kind"]
 
     var title: String {
         switch self {
+        case .path: return "位置"
         case .created: return "创建日期"
         case .modified: return "修改日期"
         case .size: return "大小"
@@ -31,6 +32,7 @@ enum ListColumn: String, CaseIterable {
     /// 内置默认列宽。
     var defaultWidth: CGFloat {
         switch self {
+        case .path: return 180
         case .created, .modified: return 132
         case .size: return 72
         case .kind: return 84
@@ -42,6 +44,7 @@ enum ListColumn: String, CaseIterable {
     /// 拖拽改宽时该列允许的最小宽度：再窄内容就看不完整了。
     var minWidth: CGFloat {
         switch self {
+        case .path: return 100
         case .created, .modified: return 104
         case .size: return 56
         case .kind: return 68
@@ -53,6 +56,7 @@ enum ListColumn: String, CaseIterable {
     /// 拖拽改宽时该列允许的最大宽度：再宽也不会多出内容。
     var maxWidth: CGFloat {
         switch self {
+        case .path: return 450
         case .created, .modified: return 280
         case .size: return 240
         case .kind: return 200
@@ -75,9 +79,32 @@ enum ListColumn: String, CaseIterable {
     /// 取出这一列在某个文件上的值。
     func value(for item: FileItem) -> String {
         switch self {
+        case .path:
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            var p = item.url.deletingLastPathComponent().path
+            if p.hasPrefix(home) {
+                p = "~" + p.dropFirst(home.count)
+            }
+            return p
         case .created: return Format.date(item.created)
         case .modified: return Format.date(item.modified)
-        case .size: return item.isNavigable ? "--" : Format.bytes(item.size)
+        case .size:
+            if item.isNavigable {
+                if AppSettings.calculateFolderSizes, let s = BundleSizeCache.shared.size(for: item.url) {
+                    return Format.bytes(s)
+                }
+                return "--"
+            }
+            if item.isPackage {
+                if let s = BundleSizeCache.shared.size(for: item.url) {
+                    return Format.bytes(s)
+                }
+                if item.size > 0 {
+                    return Format.bytes(item.size)
+                }
+                return "--"
+            }
+            return Format.bytes(item.size)
         case .kind: return item.kind
         case .owner: return FileDetails.ownerAndGroup(of: item.url).owner
         case .group: return FileDetails.ownerAndGroup(of: item.url).group

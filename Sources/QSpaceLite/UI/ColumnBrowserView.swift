@@ -17,17 +17,39 @@ final class ColumnBrowserView: NSView {
     var onFileRenamed: ((URL, URL) -> Void)?
     var onDropFiles: (([URL], URL, Bool) -> Void)?
 
-    /// 单列宽度常量
+    /// 单列宽度常量（支持自由拖拽分界线拉宽分栏与预览，彻底避免信息展示受限）
     static let minColumnWidth: CGFloat = 140
-    static let maxColumnWidth: CGFloat = 700
+    static let maxColumnWidth: CGFloat = 1000
     static var defaultColumnWidth: CGFloat { AppSettings.browserColumnWidth }
+
+    func applyColumnWidth(_ width: CGFloat) {
+        let clamped = max(Self.minColumnWidth, min(Self.maxColumnWidth, width))
+        for col in columns {
+            col.columnWidth = clamped
+        }
+        previewColumn?.columnWidth = clamped
+        layoutColumns()
+    }
+
+    /// 分栏模式下是否开启最右侧预览列（默认跟随 AppSettings，支持实时切换）
+    var isPreviewEnabled: Bool = AppSettings.isPreviewPaneVisible(for: .columns) {
+        didSet {
+            AppSettings.setPreviewPaneVisible(isPreviewEnabled, for: .columns)
+            if !isPreviewEnabled {
+                clearPreview()
+                layoutColumns()
+            } else {
+                syncPreview(items: selectedItems)
+            }
+        }
+    }
 
     private let scroll = NSScrollView()
     private let board = ColumnBoard()
-    private var columns: [BrowserColumn] = []
-    private var dividers: [ColumnDividerView] = []
+    fileprivate var columns: [BrowserColumn] = []
+    fileprivate var dividers: [ColumnDividerView] = []
     /// 选中文件时，列链最右侧追加的一栏文件预览（仿访达分栏视图）。
-    private var previewColumn: FilePreviewColumn?
+    fileprivate var previewColumn: FilePreviewColumn?
 
     private var dragStartWidths: [CGFloat] = []
     private var dragStartPreviewWidth: CGFloat = 214
@@ -43,7 +65,15 @@ final class ColumnBrowserView: NSView {
     private(set) var displayURL = URL(fileURLWithPath: NSHomeDirectory())
     /// 选中文件的名称，追加在面包屑末段；选中文件夹或未选中时为 nil。
     private(set) var displayItem: FileItem?
-    private var activeColumn = 0
+    fileprivate var activeColumn = 0
+
+    /// 当前活动列对应的目录 URL（右键新建文件、粘贴、打开终端等操作的实际目标目录）。
+    var activeColumnURL: URL {
+        if columns.indices.contains(activeColumn) {
+            return columns[activeColumn].url
+        }
+        return rootURL
+    }
     /// 程序化选中（新建/重命名后）不触发右侧展开。
     private var suppressExpansion = false
 
@@ -63,7 +93,7 @@ final class ColumnBrowserView: NSView {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.paneBackground
+        scroll.backgroundColor = .controlBackgroundColor
         scroll.scrollerStyle = .overlay
         board.owner = self
         scroll.documentView = board
@@ -80,6 +110,17 @@ final class ColumnBrowserView: NSView {
     override func layout() {
         super.layout()
         layoutColumns()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        scroll.backgroundColor = .controlBackgroundColor
+        board.needsDisplay = true
+        for col in columns {
+            col.needsDisplay = true
+        }
+        previewColumn?.needsDisplay = true
+        needsDisplay = true
     }
 
     private func layoutColumns() {
@@ -177,7 +218,7 @@ final class ColumnBrowserView: NSView {
         div.onDoubleClick = { [weak self, weak div] in
             guard let self, let div else { return }
             if div.isPreview {
-                self.previewColumn?.columnWidth = AppSettings.browserColumnWidth
+                self.previewColumn?.columnWidth = max(280, AppSettings.browserColumnWidth)
                 self.layoutColumns()
             } else {
                 self.autoSizeColumn(at: div.columnIndex)
@@ -235,15 +276,22 @@ final class ColumnBrowserView: NSView {
         board.addSubview(first)
         activeColumn = 0
         currentItem = nil
+        if isPreviewEnabled {
+            syncPreview(items: [], scrollToVisible: false)
+        }
         layoutColumns()
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
         updateLocation()
     }
 
-    /// 排序/显示隐藏变化时，保留已展开的列链，只重新读取内容。
+    /// 排序/显示隐藏变化或文件变动时，保留已展开的列链，只重新读取内容。
     private func reloadKeepingChain() {
         guard !columns.isEmpty else { return rebuild() }
+        suppressExpansion = true
+        defer { suppressExpansion = false }
+
+        let previousActive = activeColumn
         for column in columns {
             column.reload(showHidden: AppSettings.showHidden,
                           sort: sortField,
@@ -257,8 +305,28 @@ final class ColumnBrowserView: NSView {
                 break
             }
         }
+        // 维持当前活动列焦点（防跳回首列）
+        activeColumn = min(previousActive, max(0, columns.count - 1))
+
+        if columns.indices.contains(activeColumn) {
+            currentItem = columns[activeColumn].selectedItem
+        } else {
+            currentItem = nil
+        }
+
+        // 若当前选中的文件已不存在（被删除），及时清空 currentItem 并收起预览
+        if let current = currentItem {
+            let stillExists = columns.contains { col in
+                col.items.contains { $0.url.path == current.url.path }
+            }
+            if !stillExists {
+                currentItem = nil
+                clearPreview()
+            }
+        }
         layoutColumns()
-        syncPreview()
+        let activeItems = columns.indices.contains(activeColumn) ? columns[activeColumn].selectedItems : []
+        syncPreview(items: activeItems, scrollToVisible: false)
         updateLocation()
     }
 
@@ -290,8 +358,12 @@ final class ColumnBrowserView: NSView {
                   let index = self.columns.firstIndex(where: { $0 === column }) else { return false }
             return self.handleKey(event, columnIndex: index)
         }
-        column.menuProvider = { [weak self, weak column] _ in
-            self?.menuProvider?(column?.selectedItem)
+        column.menuProvider = { [weak self, weak column] item in
+            guard let self, let column else { return nil }
+            if let index = self.columns.firstIndex(where: { $0 === column }) {
+                self.activeColumn = index
+            }
+            return self.menuProvider?(item)
         }
         column.onFileRenamed = { [weak self] oldURL, newURL in
             self?.onFileRenamed?(oldURL, newURL)
@@ -338,6 +410,9 @@ final class ColumnBrowserView: NSView {
             columns.append(next)
             board.addSubview(next)
             activeColumn = index + 1
+            if isPreviewEnabled {
+                syncPreview(items: [], scrollToVisible: false)
+            }
             layoutColumns()
             next.scrollToVisible(next.bounds)
             scroll.reflectScrolledClipView(scroll.contentView)
@@ -347,8 +422,12 @@ final class ColumnBrowserView: NSView {
             activeColumn = index
         } else {
             currentItem = nil
-            clearPreview()
-            layoutColumns()
+            if isPreviewEnabled {
+                syncPreview(items: [], scrollToVisible: false)
+            } else {
+                clearPreview()
+                layoutColumns()
+            }
         }
 
         let urls = Set(selectedItems.isEmpty ? [item?.url].compactMap { $0 } : selectedItems.map { $0.url })
@@ -458,15 +537,21 @@ final class ColumnBrowserView: NSView {
         if selected.count > 1 {
             newURL = columnURL
             newItem = nil
-        } else if let item = currentItem, item.isNavigable {
-            // 选中文件夹：它自己就是当前地址（右侧同时展开它的内容）
-            newURL = item.url
-            newItem = nil
-        } else if let item = currentItem {
-            // 选中文件：地址停在它所在的一列，文件名追加为末段
-            newURL = columnURL
-            newItem = item
+            currentItem = selected.last
+        } else if let first = selected.first {
+            currentItem = first
+            if first.isNavigable {
+                // 选中文件夹：它自己就是当前地址（右侧同时展开它的内容）
+                newURL = first.url
+                newItem = nil
+            } else {
+                // 选中文件：地址停在它所在的一列，文件名追加为末段
+                newURL = columnURL
+                newItem = first
+            }
         } else {
+            // 没有选中任何项（例如刚删除文件、或点击了空白处）
+            currentItem = nil
             newURL = columnURL
             newItem = nil
         }
@@ -493,26 +578,45 @@ final class ColumnBrowserView: NSView {
         previewColumn = nil
     }
 
-    /// 当前选中单项或多项时，在最右侧追加一栏文件预览；为空选或未展开文件夹时移除预览。
+    /// 当前选中单项或多项时，在最右侧展示文件预览；为空选或未展开文件夹时展示空白占位列（仿访达保持宽度稳定，避免画面跳动）。
     private func syncPreview(items: [FileItem] = [], scrollToVisible: Bool = false) {
-        clearPreview()
-        if items.count > 1 {
-            let preview = FilePreviewColumn()
-            preview.configure(with: items)
-            previewColumn = preview
-            board.addSubview(preview)
-        } else if let item = items.first, !item.isNavigable {
-            let preview = FilePreviewColumn()
-            preview.configure(with: item)
-            previewColumn = preview
-            board.addSubview(preview)
+        guard isPreviewEnabled else {
+            clearPreview()
+            layoutColumns()
+            return
         }
+
+        let hadPreview = (previewColumn != nil)
+        let preview: FilePreviewColumn
+        if let existing = previewColumn {
+            preview = existing
+        } else {
+            let col = FilePreviewColumn()
+            col.horizontalScrollTarget = scroll
+            board.addSubview(col)
+            previewColumn = col
+            preview = col
+        }
+
+        if items.count > 1 {
+            preview.configure(with: items)
+        } else if let item = items.first, !item.isNavigable {
+            preview.configure(with: item)
+        } else {
+            // 没有选中文件（空选或选中了文件夹）：清空内容保留空白占位，彻底避免宽度收缩偏移
+            preview.configureEmpty()
+        }
+
         layoutColumns()
-        if scrollToVisible, previewColumn != nil {
+
+        // 仅在首次展示有效文件预览时才自动平滑滚入
+        if scrollToVisible && !hadPreview, items.contains(where: { !$0.isNavigable }) {
             let maxX = board.frame.width
             let visible = scroll.contentSize.width
-            scroll.contentView.scroll(to: NSPoint(x: max(0, maxX - visible), y: 0))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            if maxX > visible {
+                scroll.contentView.scroll(to: NSPoint(x: max(0, maxX - visible), y: 0))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
         }
     }
 
@@ -546,11 +650,8 @@ final class ColumnBrowserView: NSView {
     // MARK: - 对外接口（与列表/图标视图保持一致）
 
     var selectedItems: [FileItem] {
-        guard columns.indices.contains(activeColumn) else {
-            return [currentItem].compactMap { $0 }
-        }
-        let items = columns[activeColumn].selectedItems
-        return items.isEmpty ? [currentItem].compactMap { $0 } : items
+        guard columns.indices.contains(activeColumn) else { return [] }
+        return columns[activeColumn].selectedItems
     }
 
     /// 当前活动列的项目数（状态栏用，避免一直显示根目录的项目数）。
@@ -562,6 +663,7 @@ final class ColumnBrowserView: NSView {
         guard !columns.isEmpty else { return }
         activeColumn = min(activeColumn, columns.count - 1)
         columns[activeColumn].focus()
+        columns[activeColumn].scrollToVisible(columns[activeColumn].bounds)
     }
 
     func selectAll() {
@@ -613,6 +715,10 @@ final class ColumnBrowserView: NSView {
         columns.first?.selectFirstRow()
     }
 
+    func clearSelection() {
+        handleBlankAreaClick()
+    }
+
     /// 点击分栏右侧空白画布或列底部空白：清空选中并收起右侧预览（访达同款）
     func handleBlankAreaClick() {
         if activeColumn >= 0 && activeColumn < columns.count {
@@ -634,17 +740,52 @@ private final class ColumnBoard: NSView {
     weak var owner: ColumnBrowserView?
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let owner = owner {
+            // 关键修复 1：如果点击落在最右侧文件详情预览列上，坚决不触发空白收起！
+            if let preview = owner.previewColumn, preview.frame.contains(point) {
+                return
+            }
+            // 关键修复 2：如果点击落在任何已有分栏列内部，也不触发空白收起
+            for col in owner.columns {
+                if col.frame.contains(point) {
+                    return
+                }
+            }
+            // 关键修复 3：如果点击落在分栏列边框分割线上，也不收起
+            for div in owner.dividers {
+                if div.frame.contains(point) {
+                    return
+                }
+            }
+        }
         super.mouseDown(with: event)
         owner?.handleBlankAreaClick()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        if let owner = owner {
+            if let preview = owner.previewColumn, preview.frame.contains(point) {
+                let item = owner.currentItem ?? owner.selectedItems.first
+                return owner.menuProvider?(item)
+            }
+            for (idx, col) in owner.columns.enumerated() {
+                if col.frame.contains(point) {
+                    owner.activeColumn = idx
+                    return col.menu(for: event)
+                }
+            }
+        }
+        if let owner = owner, let last = owner.columns.indices.last {
+            owner.activeColumn = last
+        }
         owner?.handleBlankAreaClick()
         return owner?.menuProvider?(nil)
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.paneBackground.setFill()
+        NSColor.controlBackgroundColor.setFill()
         bounds.fill()
     }
 
@@ -706,7 +847,21 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.doubleAction = #selector(handleDoubleClick)
         table.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
         table.menuProvider = { [weak self] event in
-            self?.menuProvider?(event == nil ? nil : self?.selectedItem)
+            guard let self else { return nil }
+            if let event {
+                let point = self.table.convert(event.locationInWindow, from: nil)
+                let row = self.table.row(at: point)
+                if row >= 0 && row < self.items.count {
+                    if !self.table.selectedRowIndexes.contains(row) {
+                        self.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                    }
+                    return self.menuProvider?(self.items[row])
+                } else {
+                    return self.menuProvider?(nil)
+                }
+            } else {
+                return self.menuProvider?(nil)
+            }
         }
         table.onTriggerRename = { [weak self] row in self?.startRename(at: row) }
         table.isPointInName = { [weak self] row, point in
@@ -743,16 +898,17 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scroll.scrollerStyle = .overlay
         addSubview(scroll)
 
+        let verticalInset: CGFloat = 5.0
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: verticalInset),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -verticalInset),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1)
         ])
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.paneBackground.setFill()
+        NSColor.controlBackgroundColor.setFill()
         bounds.fill()
         Theme.hairline.setFill()
         NSRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
@@ -760,6 +916,11 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        table.backgroundColor = .controlBackgroundColor
+        scroll.backgroundColor = .controlBackgroundColor
+        table.enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
         needsDisplay = true
     }
 
@@ -786,7 +947,13 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     // MARK: - 数据
 
+    private var isReloading = false
+
     func reload(showHidden: Bool, sort: SortField, ascending: Bool, restoring keep: URL? = nil) {
+        isReloading = true
+        defer { isReloading = false }
+
+        let oldSelectedRow = table.selectedRow
         let raw = FileItem.contents(of: url, showHidden: showHidden)
         items = FileOrganizer.sections(items: raw, sort: sort, ascending: ascending, group: .none)
             .flatMap { $0.items }
@@ -794,6 +961,11 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
         if let keep, let index = items.firstIndex(where: { $0.url == keep }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             table.scrollRowToVisible(index)
+        } else if oldSelectedRow >= 0 && !items.isEmpty {
+            // 被选中的条目已不存在（如被删除/移至废纸篓）：仿 Finder 自动选中邻近的相邻项，绝不丢失焦点
+            let newIndex = min(oldSelectedRow, items.count - 1)
+            table.selectRowIndexes(IndexSet(integer: newIndex), byExtendingSelection: false)
+            table.scrollRowToVisible(newIndex)
         } else {
             table.deselectAll(nil)
         }
@@ -920,6 +1092,7 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.enumerateAvailableRowViews { rowView, _ in
             rowView.needsDisplay = true
         }
+        guard !isReloading else { return }
         onActivate?()
         onSelect?(selectedItem)
     }
@@ -1098,6 +1271,11 @@ class ColumnTableRowView: NSTableRowView {
         path.close()
         return path
     }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 }
 
 // MARK: - 单元格
@@ -1183,6 +1361,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         title.delegate = self
 
         if let editor = title.currentEditor() as? NSTextView {
+            editor.allowsUndo = true
             editor.textColor = .labelColor
             editor.insertionPointColor = .labelColor
             editor.drawsBackground = false
@@ -1206,6 +1385,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
             self.isStartingEditing = false
             self.title.textColor = .labelColor
             if let editor = self.title.currentEditor() as? NSTextView {
+                editor.allowsUndo = true
                 editor.textColor = .labelColor
                 editor.insertionPointColor = .labelColor
                 var attrs = editor.typingAttributes
@@ -1253,6 +1433,12 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
             return true
         } else if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             endInlineEditing(commit: false)
+            return true
+        } else if commandSelector == Selector(("undo:")) {
+            textView.undoManager?.undo()
+            return true
+        } else if commandSelector == Selector(("redo:")) {
+            textView.undoManager?.redo()
             return true
         }
         return false
@@ -1388,43 +1574,65 @@ private final class ColumnScrollView: NSScrollView {
 /// （种类、大小、创建与修改时间、上次打开时间、版本、尺寸、位置等），1:1 还原访达分栏预览列。
 final class FilePreviewColumn: NSView {
 
-    var columnWidth: CGFloat = AppSettings.browserColumnWidth
+    var columnWidth: CGFloat = max(280, AppSettings.browserColumnWidth)
+    weak var horizontalScrollTarget: NSScrollView? {
+        didSet {
+            scroll.horizontalTarget = horizontalScrollTarget
+        }
+    }
 
-    static let bundleSizeCache = NSCache<NSURL, NSNumber>()
+    static var bundleSizeCache: NSCache<NSURL, NSNumber> { BundleSizeCache.shared.cache }
     private var currentURL: URL?
     private weak var sizeValueField: NSTextField?
 
     static func calculateDirectorySize(at url: URL) -> Int64 {
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileSizeKey, .isRegularFileKey],
-            options: []
-        ) else { return 0 }
-
-        var total: Int64 = 0
-        for case let fileURL as URL in enumerator {
-            let vals = try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey, .isRegularFileKey])
-            if vals?.isRegularFile == true {
-                if let s = vals?.totalFileAllocatedSize ?? vals?.fileSize {
-                    total += Int64(s)
-                }
-            }
-        }
-        return total
+        BundleSizeCache.calculateDirectorySize(at: url)
     }
 
     private final class FlippedDocumentView: NSView {
         override var isFlipped: Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            // 阻断点击冒泡，避免误触画布的空白处收起逻辑
+        }
+        override func scrollWheel(with event: NSEvent) {
+            // 向上冒泡给 PreviewScrollView
+            nextResponder?.scrollWheel(with: event)
+        }
     }
 
-    private let scroll = NSScrollView()
+    private final class PreviewScrollView: NSScrollView {
+        weak var horizontalTarget: NSScrollView?
+
+        override func mouseDown(with event: NSEvent) {
+            // 阻断点击冒泡
+        }
+
+        override func scrollWheel(with event: NSEvent) {
+            let dx = abs(event.scrollingDeltaX)
+            let dy = abs(event.scrollingDeltaY)
+            if dx > dy, dx > 0.01 {
+                if let target = horizontalTarget ?? enclosingScrollView {
+                    target.scrollWheel(with: event)
+                    return
+                }
+            }
+            super.scrollWheel(with: event)
+        }
+    }
+
+    private let scroll = PreviewScrollView()
     private let documentView = FlippedDocumentView()
     private let iconView = NSImageView()
     private let textContainer = NSView()
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let subtitleLabel = NSTextField(labelWithString: "")
-    private let infoHeaderLabel = NSTextField(labelWithString: "信息")
+    private let nameLabel = SelectableLabel(selectableText: "")
+    private let subtitleLabel = SelectableLabel(selectableText: "")
+    private let infoHeaderContainer = NSView()
+    private let infoHeaderLabel = NSTextField(labelWithString: "信息".localized)
+    private let toggleMoreButton = LinkButton()
     private let infoStack = NSStackView()
+    private var isExpanded: Bool = false
+    private var currentPrimaryCount: Int = 0
+    private var allRowViews: [DetailRowView] = []
 
     private var iconLeadingConstraint: NSLayoutConstraint!
     private var iconTrailingConstraint: NSLayoutConstraint!
@@ -1437,6 +1645,35 @@ final class FilePreviewColumn: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func mouseDown(with event: NSEvent) {
+        // 阻断点击冒泡至底层画布
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let dx = abs(event.scrollingDeltaX)
+        let dy = abs(event.scrollingDeltaY)
+        if dx > dy, dx > 0.01 {
+            if let target = horizontalScrollTarget ?? enclosingScrollView {
+                target.scrollWheel(with: event)
+                return
+            }
+        }
+        super.scrollWheel(with: event)
+    }
+
+    func configureEmpty() {
+        currentURL = nil
+        sizeValueField = nil
+        iconView.image = nil
+        nameLabel.stringValue = ""
+        subtitleLabel.stringValue = ""
+        toggleMoreButton.isHidden = true
+        infoHeaderContainer.isHidden = true
+        infoStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        allRowViews.removeAll()
+        documentView.isHidden = true
+    }
+
     private func build() {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
@@ -1444,7 +1681,7 @@ final class FilePreviewColumn: NSView {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.paneBackground
+        scroll.backgroundColor = .controlBackgroundColor
         scroll.scrollerStyle = .overlay
         addSubview(scroll)
 
@@ -1465,6 +1702,8 @@ final class FilePreviewColumn: NSView {
         nameLabel.lineBreakMode = .byWordWrapping
         nameLabel.maximumNumberOfLines = 3
         nameLabel.alignment = .left
+        nameLabel.isSelectable = true
+        nameLabel.focusRingType = .none
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1472,22 +1711,51 @@ final class FilePreviewColumn: NSView {
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.alignment = .left
+        subtitleLabel.isSelectable = true
+        subtitleLabel.focusRingType = .none
         subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        infoHeaderLabel.font = .systemFont(ofSize: 11.5, weight: .bold)
+        infoHeaderContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        infoHeaderLabel.font = .systemFont(ofSize: 12.5, weight: .bold)
         infoHeaderLabel.textColor = .labelColor
         infoHeaderLabel.alignment = .left
+        infoHeaderLabel.isEditable = false
+        infoHeaderLabel.isSelectable = false
+        infoHeaderLabel.isBordered = false
+        infoHeaderLabel.drawsBackground = false
         infoHeaderLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        toggleMoreButton.title = "更多".localized
+        toggleMoreButton.font = .systemFont(ofSize: 12, weight: .regular)
+        toggleMoreButton.contentTintColor = .controlAccentColor
+        toggleMoreButton.isBordered = false
+        toggleMoreButton.setButtonType(.momentaryPushIn)
+        toggleMoreButton.target = self
+        toggleMoreButton.action = #selector(toggleMoreAction)
+        toggleMoreButton.translatesAutoresizingMaskIntoConstraints = false
+        toggleMoreButton.isHidden = true
+
+        infoHeaderContainer.addSubview(infoHeaderLabel)
+        infoHeaderContainer.addSubview(toggleMoreButton)
+
+        NSLayoutConstraint.activate([
+            infoHeaderLabel.leadingAnchor.constraint(equalTo: infoHeaderContainer.leadingAnchor),
+            infoHeaderLabel.centerYAnchor.constraint(equalTo: infoHeaderContainer.centerYAnchor),
+            toggleMoreButton.trailingAnchor.constraint(equalTo: infoHeaderContainer.trailingAnchor),
+            toggleMoreButton.centerYAnchor.constraint(equalTo: infoHeaderContainer.centerYAnchor),
+            infoHeaderContainer.heightAnchor.constraint(equalToConstant: 22)
+        ])
+
         infoStack.orientation = .vertical
-        infoStack.alignment = .width
+        infoStack.alignment = .leading
         infoStack.spacing = 0
         infoStack.translatesAutoresizingMaskIntoConstraints = false
 
         textContainer.addSubview(nameLabel)
         textContainer.addSubview(subtitleLabel)
-        textContainer.addSubview(infoHeaderLabel)
+        textContainer.addSubview(infoHeaderContainer)
         textContainer.addSubview(infoStack)
 
         iconLeadingConstraint = iconView.leadingAnchor.constraint(greaterThanOrEqualTo: documentView.leadingAnchor, constant: 18)
@@ -1525,11 +1793,11 @@ final class FilePreviewColumn: NSView {
             subtitleLabel.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
 
-            infoHeaderLabel.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 16),
-            infoHeaderLabel.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
-            infoHeaderLabel.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
+            infoHeaderContainer.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 16),
+            infoHeaderContainer.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
+            infoHeaderContainer.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
 
-            infoStack.topAnchor.constraint(equalTo: infoHeaderLabel.bottomAnchor, constant: 4),
+            infoStack.topAnchor.constraint(equalTo: infoHeaderContainer.bottomAnchor, constant: 4),
             infoStack.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
             infoStack.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
             infoStack.bottomAnchor.constraint(equalTo: textContainer.bottomAnchor)
@@ -1537,8 +1805,10 @@ final class FilePreviewColumn: NSView {
     }
 
     func configure(with item: FileItem) {
+        documentView.isHidden = false
+        infoHeaderContainer.isHidden = false
         currentURL = item.url
-        sizeValueField = nil
+        isExpanded = false
 
         let keys: Set<URLResourceKey> = [
             .isDirectoryKey, .isPackageKey, .fileSizeKey, .totalFileAllocatedSizeKey,
@@ -1550,14 +1820,11 @@ final class FilePreviewColumn: NSView {
         let isPackage = values?.isPackage ?? false
 
         // 1. 顶部图片/图标：图片文件可铺满左右边距展示大图，文件夹/包/普通文件展示 128pt 高清大图标
-        var imageDimensions: (Int, Int)?
         if !isDirectory && !isPackage, let image = NSImage(contentsOfFile: item.url.path), image.size.width > 1 {
             iconView.image = image
             iconLeadingConstraint.constant = 0
             iconTrailingConstraint.constant = 0
             iconHeightConstraint.constant = 176
-            let px = Int(image.size.width), py = Int(image.size.height)
-            if px > 0, py > 0 { imageDimensions = (px, py) }
         } else {
             let icon = NSWorkspace.shared.icon(forFile: item.url.path)
             icon.size = NSSize(width: 128, height: 128)
@@ -1570,7 +1837,7 @@ final class FilePreviewColumn: NSView {
         // 2. 标题与副标题（种类 - 大小，与访达一致）
         nameLabel.alignment = .left
         subtitleLabel.alignment = .left
-        infoHeaderLabel.isHidden = false
+        infoHeaderContainer.isHidden = false
         nameLabel.stringValue = item.name
 
         var initialSize: Int64?
@@ -1582,108 +1849,34 @@ final class FilePreviewColumn: NSView {
             initialSize = cached.int64Value
         }
 
-        let kindText = values?.localizedTypeDescription ?? (isDirectory ? (isPackage ? "应用程序" : "文件夹") : "文件")
-        if let initialSize {
+        let kindText = values?.localizedTypeDescription ?? (isDirectory ? (isPackage ? "应用程序".localized : "文件夹".localized) : "文件".localized)
+        if isDirectory && !isPackage {
+            let itemCount = (try? FileManager.default.contentsOfDirectory(atPath: item.url.path).filter { !$0.hasPrefix(".") }.count) ?? 0
+            if let initialSize {
+                subtitleLabel.stringValue = "\(kindText) - \(itemCount) 项，\(Format.bytes(initialSize))"
+            } else {
+                subtitleLabel.stringValue = "\(kindText) - \(itemCount) 项"
+            }
+        } else if let initialSize {
             subtitleLabel.stringValue = "\(kindText) - \(Format.bytes(initialSize))"
         } else {
             subtitleLabel.stringValue = kindText
         }
 
-        // 3. 「信息」键值表（左侧项目名浅灰、右侧数值右对齐 + 行间细分割线，复刻访达标准预览）
-        var rows: [(String, String)] = []
-        if let initialSize {
-            rows.append(("大小", Format.bytes(initialSize)))
-        } else if isPackage || isDirectory {
-            rows.append(("大小", "正在计算…"))
-        }
-        if let created = values?.creationDate {
-            rows.append(("创建时间", Format.date(created)))
-        }
-        if let modified = values?.contentModificationDate {
-            rows.append(("修改时间", Format.date(modified)))
-        }
-        if let accessed = values?.contentAccessDate {
-            rows.append(("上次打开时间", Format.date(accessed)))
-        } else {
-            rows.append(("上次打开时间", "--"))
-        }
-        if let (px, py) = imageDimensions {
-            rows.append(("尺寸", "\(px) × \(py)"))
-        }
-        if isPackage,
-           let bundle = Bundle(url: item.url),
-           let version = (bundle.infoDictionary?["CFBundleShortVersionString"] as? String)
-                      ?? (bundle.infoDictionary?["CFBundleVersion"] as? String),
-           !version.isEmpty {
-            rows.append(("版本", version))
-        }
-        if values?.isSymbolicLink == true {
-            let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: item.url.path)) ?? "?"
-            rows.append(("链接目标", target))
-        }
-
-        infoStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (index, pair) in rows.enumerated() {
-            let rowContainer = NSView()
-            rowContainer.translatesAutoresizingMaskIntoConstraints = false
-
-            let k = NSTextField(labelWithString: pair.0)
-            k.font = .systemFont(ofSize: 11.5)
-            k.textColor = .secondaryLabelColor
-            k.alignment = .left
-            k.setContentHuggingPriority(.required, for: .horizontal)
-            k.setContentCompressionResistancePriority(.required, for: .horizontal)
-            k.translatesAutoresizingMaskIntoConstraints = false
-
-            let v = NSTextField(labelWithString: pair.1)
-            v.font = .systemFont(ofSize: 11.5, weight: .medium)
-            v.textColor = .labelColor
-            v.alignment = .right
-            v.lineBreakMode = .byTruncatingMiddle
-            v.maximumNumberOfLines = 1
-            v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            v.translatesAutoresizingMaskIntoConstraints = false
-
-            if pair.0 == "大小" {
-                self.sizeValueField = v
-            }
-
-            rowContainer.addSubview(k)
-            rowContainer.addSubview(v)
-
-            NSLayoutConstraint.activate([
-                rowContainer.heightAnchor.constraint(equalToConstant: 26),
-                k.leadingAnchor.constraint(equalTo: rowContainer.leadingAnchor),
-                k.centerYAnchor.constraint(equalTo: rowContainer.centerYAnchor),
-                v.trailingAnchor.constraint(equalTo: rowContainer.trailingAnchor),
-                v.centerYAnchor.constraint(equalTo: rowContainer.centerYAnchor),
-                v.leadingAnchor.constraint(greaterThanOrEqualTo: k.trailingAnchor, constant: 10)
-            ])
-
-            if index < rows.count - 1 {
-                let divider = Theme.hairlineView()
-                rowContainer.addSubview(divider)
-                NSLayoutConstraint.activate([
-                    divider.leadingAnchor.constraint(equalTo: rowContainer.leadingAnchor),
-                    divider.trailingAnchor.constraint(equalTo: rowContainer.trailingAnchor),
-                    divider.bottomAnchor.constraint(equalTo: rowContainer.bottomAnchor),
-                    divider.heightAnchor.constraint(equalToConstant: 1)
-                ])
-            }
-
-            infoStack.addArrangedSubview(rowContainer)
-        }
+        // 3. 「信息」键值表（1:1 还原访达信息展示引擎）
+        let metaResult = FileMetadataEngine.extractMetadata(for: item.url, resourceValues: values)
+        buildRows(primary: metaResult.primaryRows, extended: metaResult.extendedRows)
 
         // 异步计算包（.app）或文件夹真实大小，计算完毕后自动更新界面并写入缓存
         if (isPackage || isDirectory) && initialSize == nil {
             let targetURL = item.url
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let total = FilePreviewColumn.calculateDirectorySize(at: targetURL)
-                FilePreviewColumn.bundleSizeCache.setObject(NSNumber(value: total), forKey: targetURL as NSURL)
-                DispatchQueue.main.async {
-                    guard let self, self.currentURL == targetURL else { return }
-                    let formatted = Format.bytes(total)
-                    self.sizeValueField?.stringValue = formatted
+            BundleSizeCache.shared.requestSize(for: targetURL) { [weak self] total in
+                guard let self, self.currentURL == targetURL else { return }
+                let formatted = Format.bytes(total)
+                if isDirectory && !isPackage {
+                    let itemCount = (try? FileManager.default.contentsOfDirectory(atPath: targetURL.path).filter { !$0.hasPrefix(".") }.count) ?? 0
+                    self.subtitleLabel.stringValue = "\(kindText) - \(itemCount) 项，\(formatted)"
+                } else {
                     self.subtitleLabel.stringValue = "\(kindText) - \(formatted)"
                 }
             }
@@ -1697,6 +1890,9 @@ final class FilePreviewColumn: NSView {
             configure(with: items[0])
             return
         }
+        documentView.isHidden = false
+        infoHeaderContainer.isHidden = false
+        isExpanded = false
 
         // 1. 顶部叠放复合预览图（双层文档/文件夹层叠外观）
         let stackWidth: CGFloat = 128
@@ -1780,64 +1976,74 @@ final class FilePreviewColumn: NSView {
 
         var rows: [(String, String)] = []
         if let cr = dateRangeString(creationDates) {
-            rows.append(("创建时间", cr))
+            rows.append(("创建时间".localized, cr))
         }
         if let md = dateRangeString(modificationDates) {
-            rows.append(("修改时间", md))
+            rows.append(("修改时间".localized, md))
         }
 
-        infoHeaderLabel.isHidden = true
-        infoStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (index, pair) in rows.enumerated() {
-            let rowContainer = NSView()
-            rowContainer.translatesAutoresizingMaskIntoConstraints = false
+        infoHeaderContainer.isHidden = true
+        buildRows(primary: rows, extended: [])
+    }
 
-            let k = NSTextField(labelWithString: pair.0)
-            k.font = .systemFont(ofSize: 11.5)
-            k.textColor = .secondaryLabelColor
-            k.alignment = .left
-            k.setContentHuggingPriority(.required, for: .horizontal)
-            k.setContentCompressionResistancePriority(.required, for: .horizontal)
-            k.translatesAutoresizingMaskIntoConstraints = false
-
-            let v = NSTextField(labelWithString: pair.1)
-            v.font = .systemFont(ofSize: 11.5)
-            v.textColor = .labelColor
-            v.alignment = .right
-            v.lineBreakMode = .byTruncatingMiddle
-            v.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            v.translatesAutoresizingMaskIntoConstraints = false
-
-            rowContainer.addSubview(k)
-            rowContainer.addSubview(v)
-
-            NSLayoutConstraint.activate([
-                rowContainer.heightAnchor.constraint(equalToConstant: 26),
-                k.leadingAnchor.constraint(equalTo: rowContainer.leadingAnchor),
-                k.centerYAnchor.constraint(equalTo: rowContainer.centerYAnchor),
-                v.trailingAnchor.constraint(equalTo: rowContainer.trailingAnchor),
-                v.centerYAnchor.constraint(equalTo: rowContainer.centerYAnchor),
-                v.leadingAnchor.constraint(greaterThanOrEqualTo: k.trailingAnchor, constant: 10)
-            ])
-
-            if index < rows.count - 1 {
-                let divider = Theme.hairlineView()
-                rowContainer.addSubview(divider)
-                NSLayoutConstraint.activate([
-                    divider.leadingAnchor.constraint(equalTo: rowContainer.leadingAnchor),
-                    divider.trailingAnchor.constraint(equalTo: rowContainer.trailingAnchor),
-                    divider.bottomAnchor.constraint(equalTo: rowContainer.bottomAnchor),
-                    divider.heightAnchor.constraint(equalToConstant: 1)
-                ])
-            }
-
-            infoStack.addArrangedSubview(rowContainer)
+    @objc private func toggleMoreAction() {
+        isExpanded.toggle()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            self.updateRowVisibilities()
+            self.layoutSubtreeIfNeeded()
         }
     }
 
+    private func updateRowVisibilities() {
+        let totalCount = allRowViews.count
+        let hasExtended = (totalCount > currentPrimaryCount)
+
+        if !hasExtended {
+            toggleMoreButton.isHidden = true
+            for (i, row) in allRowViews.enumerated() {
+                row.isHidden = false
+                row.showDivider = (i < totalCount - 1)
+            }
+        } else {
+            toggleMoreButton.isHidden = false
+            toggleMoreButton.title = isExpanded ? "更少".localized : "更多".localized
+
+            for (i, row) in allRowViews.enumerated() {
+                if i < currentPrimaryCount {
+                    row.isHidden = false
+                    row.showDivider = isExpanded ? true : (i < currentPrimaryCount - 1)
+                } else {
+                    row.isHidden = !isExpanded
+                    row.showDivider = (i < totalCount - 1)
+                }
+            }
+        }
+    }
+
+    private func buildRows(primary: [(String, String)], extended: [(String, String)]) {
+        infoStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        allRowViews.removeAll()
+        currentPrimaryCount = primary.count
+
+        let combined = primary + extended
+
+        for pair in combined {
+            let rowView = DetailRowView(key: pair.0, value: pair.1)
+            infoStack.addArrangedSubview(rowView)
+            NSLayoutConstraint.activate([
+                rowView.leadingAnchor.constraint(equalTo: infoStack.leadingAnchor),
+                rowView.trailingAnchor.constraint(equalTo: infoStack.trailingAnchor)
+            ])
+            allRowViews.append(rowView)
+        }
+
+        updateRowVisibilities()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        Theme.paneBackground.setFill()
+        NSColor.controlBackgroundColor.setFill()
         bounds.fill()
         Theme.hairline.setFill()
         NSRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
@@ -1845,6 +2051,7 @@ final class FilePreviewColumn: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        scroll.backgroundColor = .controlBackgroundColor
         needsDisplay = true
     }
 }

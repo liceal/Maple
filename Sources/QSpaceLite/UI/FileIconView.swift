@@ -9,7 +9,7 @@ final class FileIconView: NSView {
     var onSelectionChange: ((Set<URL>) -> Void)?
     var onActivate: (() -> Void)?
     var keyHandler: ((NSEvent) -> Bool)?
-    var menuProvider: (() -> NSMenu?)?
+    var menuProvider: ((FileItem?) -> NSMenu?)?
     var onFileRenamed: ((URL, URL) -> Void)?
     var currentFolderURL: URL?
     var onDropFiles: (([URL], URL, Bool) -> Void)?
@@ -54,19 +54,23 @@ final class FileIconView: NSView {
         wantsLayer = true
         layer?.masksToBounds = true
 
+        let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        scroll.frame = initialFrame
+        collection.frame = initialFrame
+
         FileIconItem.iconSize = iconSize
         flowLayout.itemSize = Self.itemSize(for: iconSize)
         flowLayout.minimumInteritemSpacing = 8
         flowLayout.minimumLineSpacing = 10
         flowLayout.sectionInset = NSEdgeInsets(top: 10, left: 10, bottom: 16, right: 10)
-        flowLayout.headerReferenceSize = NSSize(width: 0, height: 24)
+        flowLayout.headerReferenceSize = .zero
 
         collection.wantsLayer = true
         collection.collectionViewLayout = flowLayout
         collection.isSelectable = true
         collection.allowsMultipleSelection = true
         collection.allowsEmptySelection = true
-        collection.backgroundColors = [Theme.paneBackground]
+        collection.backgroundColors = [.controlBackgroundColor]
         collection.registerForDraggedTypes([.fileURL])
         collection.dataSource = self
         collection.delegate = self
@@ -74,7 +78,7 @@ final class FileIconView: NSView {
         collection.register(IconSectionHeader.self,
                             forSupplementaryViewOfKind: NSCollectionView.elementKindSectionHeader,
                             withIdentifier: IconSectionHeader.identifier)
-        collection.menuProvider = { [weak self] in self?.menuProvider?() }
+        collection.menuProvider = { [weak self] item in self?.menuProvider?(item) }
         collection.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
 
         // 事件回调注入：双击即刻打开、空白处点击/框选通知、窗格激活
@@ -101,7 +105,7 @@ final class FileIconView: NSView {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.paneBackground
+        scroll.backgroundColor = .controlBackgroundColor
         scroll.onSwipeBegin = { [weak self] in
             self?.handleSwipeBegin()
         }
@@ -134,11 +138,22 @@ final class FileIconView: NSView {
         ])
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        collection.backgroundColors = [.controlBackgroundColor]
+        scroll.backgroundColor = .controlBackgroundColor
+        collection.reloadData()
+        needsDisplay = true
+    }
+
     // MARK: - 触摸板丝滑左右滑动手势（右滑回退 / 左滑前进）
 
     private func handleSwipeBegin() {
         collection.layer?.removeAllAnimations()
         swipeBadge.layer?.removeAllAnimations()
+        swipeBadge.resetScale(animated: false)
+        swipeBadge.alphaValue = 0
+        swipeBadge.isHidden = true
     }
 
     private func handleSwipeChange(totalFingerDX: CGFloat) {
@@ -163,27 +178,30 @@ final class FileIconView: NSView {
         collection.layer?.opacity = allowed ? Float(max(0.86, 1.0 - (absDX / swipeTriggerThreshold) * 0.10)) : 1.0
         CATransaction.commit()
 
-        // 2. 浏览器同款边缘圆形回退/前进指示器（随手指平滑拉出，达阈值时高亮激活）
+        // 2. 浏览器同款边缘圆形回退/前进指示器（从小变大，透明度从浅变深）
         guard allowed else {
             swipeBadge.isHidden = true
             swipeBadge.alphaValue = 0
             return
         }
 
-        let progress = min(1.35, absDX / swipeTriggerThreshold)
+        let progress = absDX / swipeTriggerThreshold
         let clamped = min(1.0, progress)
         let ready = absDX >= swipeTriggerThreshold
 
         swipeBadge.isHidden = false
-        swipeBadge.configure(isBack: isBack, progress: clamped, isArmed: ready)
-        swipeBadge.alphaValue = min(1.0, clamped * 1.25)
+        swipeBadge.configure(isBack: isBack, progress: progress, isArmed: ready)
+        // 透明度从浅变深：0.0 渐进平滑过渡至 1.0
+        swipeBadge.alphaValue = min(1.0, max(0.0, pow(clamped, 0.92)))
 
         let badgeD = SwipeIndicatorBadge.diameter
-        let travel: CGFloat = 18 + min(34, absDX * 0.34)
+        let startMargin: CGFloat = 8
+        let maxTravel: CGFloat = 28
+        let currentTravel = min(maxTravel, absDX * 0.28)
         if isRightSlide {
-            badgeLeadingConstraint.constant = -badgeD + travel
+            badgeLeadingConstraint.constant = startMargin + currentTravel
         } else {
-            badgeLeadingConstraint.constant = bounds.width - travel
+            badgeLeadingConstraint.constant = bounds.width - badgeD - startMargin - currentTravel
         }
     }
 
@@ -282,6 +300,9 @@ final class FileIconView: NSView {
             ctx.duration = triggered ? 0.14 : 0.16
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             swipeBadge.animator().alphaValue = 0
+            if !triggered {
+                swipeBadge.resetScale(animated: true)
+            }
         }, completionHandler: { [weak self] in
             guard let self else { return }
             if self.swipeBadge.alphaValue == 0 {
@@ -413,6 +434,10 @@ final class FileIconView: NSView {
         updateVisibleSelectionStates()
     }
 
+    func deselectAll() {
+        collection.deselectAll(nil)
+    }
+
     func scrollToTop() { collection.scroll(.zero) }
 
     /// 键盘上下/左右移动选中项（供搜索面板在输入框焦点下也能快速切换选中项）。
@@ -452,7 +477,19 @@ final class FileIconView: NSView {
 
 // MARK: - 数据源 / 代理
 
-extension FileIconView: NSCollectionViewDataSource, NSCollectionViewDelegate {
+extension FileIconView: NSCollectionViewDataSource, NSCollectionViewDelegate, NSCollectionViewDelegateFlowLayout {
+
+    func collectionView(_ collectionView: NSCollectionView,
+                        layout collectionViewLayout: NSCollectionViewLayout,
+                        referenceSizeForHeaderInSection section: Int) -> NSSize {
+        guard section < sections.count else { return .zero }
+        let s = sections[section]
+        if s.title.isEmpty {
+            return .zero
+        }
+        let w = max(collectionView.bounds.width - 20, 100)
+        return NSSize(width: w, height: 24)
+    }
 
     func numberOfSections(in collectionView: NSCollectionView) -> Int { sections.count }
 
@@ -543,7 +580,7 @@ extension FileIconView: NSCollectionViewDataSource, NSCollectionViewDelegate {
 
 final class KeyCollectionView: NSCollectionView {
     var keyHandler: ((NSEvent) -> Bool)?
-    var menuProvider: (() -> NSMenu?)?
+    var menuProvider: ((FileItem?) -> NSMenu?)?
     var onActivate: (() -> Void)?
     var itemProvider: ((IndexPath) -> FileItem?)?
     var onOpenItem: ((FileItem) -> Void)?
@@ -780,20 +817,23 @@ final class KeyCollectionView: NSCollectionView {
         onActivate?()
 
         let point = convert(event.locationInWindow, from: nil)
+        let clickedItem: FileItem?
         if let indexPath = indexPathForItem(at: point) {
             // 右键未选中的项目时单选该项目；若已在多选集合中则保持多选
             if !selectionIndexPaths.contains(indexPath) {
                 selectionIndexPaths = [indexPath]
                 onSelectionChanged?()
             }
+            clickedItem = itemProvider?(indexPath)
         } else {
             // 右键空白处：与访达一致清空选中，展示文件夹级菜单
             if !selectionIndexPaths.isEmpty {
                 deselectAll(nil)
                 onSelectionChanged?()
             }
+            clickedItem = nil
         }
-        return menuProvider?() ?? super.menu(for: event)
+        return menuProvider?(clickedItem) ?? super.menu(for: event)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -968,6 +1008,7 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
         label.delegate = self
 
         if let editor = label.currentEditor() as? NSTextView {
+            editor.allowsUndo = true
             editor.textColor = .labelColor
             editor.insertionPointColor = .labelColor
             editor.drawsBackground = false
@@ -991,6 +1032,7 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
             self.isStartingEditing = false
             self.label.textColor = .labelColor
             if let editor = self.label.currentEditor() as? NSTextView {
+                editor.allowsUndo = true
                 editor.textColor = .labelColor
                 editor.insertionPointColor = .labelColor
                 var attrs = editor.typingAttributes
@@ -1037,6 +1079,12 @@ final class FileIconItem: NSCollectionViewItem, NSTextFieldDelegate {
             return true
         } else if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             endInlineEditing(commit: false)
+            return true
+        } else if commandSelector == Selector(("undo:")) {
+            textView.undoManager?.undo()
+            return true
+        } else if commandSelector == Selector(("redo:")) {
+            textView.undoManager?.redo()
             return true
         }
         return false
@@ -1236,6 +1284,7 @@ final class SwipeIndicatorBadge: NSView {
 
         arrowView.translatesAutoresizingMaskIntoConstraints = false
         arrowView.imageScaling = .scaleProportionallyDown
+        arrowView.wantsLayer = true
         addSubview(arrowView)
 
         NSLayoutConstraint.activate([
@@ -1265,15 +1314,46 @@ final class SwipeIndicatorBadge: NSView {
             updateAppearance()
         }
 
-        let scale = 0.78 + 0.22 * min(1.0, progress)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
+        // 从小变大：从 0.35 开始平滑放大至 1.0，达标超额时提供弹性质感 (至 1.08)
+        let clamped = min(1.0, max(0.0, progress))
+        let ease = sin(clamped * .pi / 2)
+        let scale: CGFloat
+        if isArmed {
+            scale = 1.0 + min(0.08, max(0.0, progress - 1.0) * 0.22)
+        } else {
+            scale = 0.35 + 0.65 * ease
+        }
+
         let center = CGPoint(x: Self.diameter * 0.5, y: Self.diameter * 0.5)
         var t = CATransform3DIdentity
         t = CATransform3DTranslate(t, center.x, center.y, 0)
         t = CATransform3DScale(t, scale, scale, 1)
         t = CATransform3DTranslate(t, -center.x, -center.y, 0)
-        circleLayer.transform = t
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.layer?.transform = t
+        CATransaction.commit()
+    }
+
+    func resetScale(animated: Bool) {
+        let center = CGPoint(x: Self.diameter * 0.5, y: Self.diameter * 0.5)
+        var t = CATransform3DIdentity
+        t = CATransform3DTranslate(t, center.x, center.y, 0)
+        t = CATransform3DScale(t, 0.35, 0.35, 1)
+        t = CATransform3DTranslate(t, -center.x, -center.y, 0)
+
+        if animated {
+            let anim = CABasicAnimation(keyPath: "transform")
+            anim.fromValue = self.layer?.transform
+            anim.toValue = t
+            anim.duration = 0.16
+            anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self.layer?.add(anim, forKey: "swipeResetScale")
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.layer?.transform = t
         CATransaction.commit()
     }
 

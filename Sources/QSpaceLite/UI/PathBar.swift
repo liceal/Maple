@@ -1,6 +1,6 @@
 import AppKit
 
-/// 仿 QSpace 的多级面包屑路径栏：
+/// 原生多级面包屑路径栏：
 /// - 单个胶囊背景，内部按层级横向排列「图标 + 目录名 + 箭头」
 /// - 点目录名：跳转到该级目录；点最后一级目录名：就地切换为可编辑路径
 /// - 点箭头：弹出该级目录下的子文件夹列表
@@ -37,7 +37,7 @@ final class PathBar: NSView {
     /// 标签视图的徽章（显示「圆点 + 标签名」，不参与路径导航）。
     private var badge: (title: String, color: NSColor)?
 
-    /// 所属窗格是否为焦点窗格（非焦点窗格整体变暗，与 QSpace 一致）。
+    /// 所属窗格是否为焦点窗格（非焦点窗格整体变暗，与原生规范一致）。
     var isActive: Bool = false {
         didSet { if isActive != oldValue { needsDisplay = true } }
     }
@@ -231,7 +231,7 @@ final class PathBar: NSView {
         editor.action = #selector(commitEditing)
         addSubview(editor)
 
-        // 收藏星标：常驻显示在地址栏右侧（QSpace Pro 风格）
+        // 收藏星标：常驻显示在地址栏右侧（原生高精风格）
         starButton.translatesAutoresizingMaskIntoConstraints = true
         starButton.isHidden = false
         starButton.onToggle = { [weak self] in
@@ -318,10 +318,14 @@ final class PathBar: NSView {
         }
         paths.reverse()
 
-        // 位于 iCloud 云盘或主目录内时，从对应特殊根起点开始显示（不暴露冗长底层路径），与 QSpace 一致
+        // 位于 废纸篓、iCloud 云盘或主目录内时，从对应特殊根起点开始显示（不暴露冗长底层路径），与原生规范一致
         let homePath = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
         let iCloudPath = homePath + "/Library/Mobile Documents/com~apple~CloudDocs"
-        if standardized.path == iCloudPath || standardized.path.hasPrefix(iCloudPath + "/"),
+        let trashPath = homePath + "/.Trash"
+        if standardized.path == trashPath || standardized.path.hasPrefix(trashPath + "/"),
+           let start = paths.firstIndex(of: trashPath) {
+            paths = Array(paths[start...])
+        } else if standardized.path == iCloudPath || standardized.path.hasPrefix(iCloudPath + "/"),
            let start = paths.firstIndex(of: iCloudPath) {
             paths = Array(paths[start...])
         } else if standardized.path == homePath || standardized.path.hasPrefix(homePath + "/"),
@@ -335,6 +339,9 @@ final class PathBar: NSView {
     private func displayName(forPath path: String) -> String {
         if path.hasSuffix("/com~apple~CloudDocs") {
             return "iCloud 云盘"
+        }
+        if path.hasSuffix("/.Trash") || path.hasSuffix("/Trash") {
+            return "废纸篓".localized
         }
         let name = FileManager.default.displayName(atPath: path)
         if !name.isEmpty { return name }
@@ -1240,11 +1247,11 @@ extension PathBar: NSTextFieldDelegate {
 
 // MARK: - 收藏星标
 
-/// 地址栏最右侧的五角星（QSpace Pro 原版资源图标）：
+/// 地址栏最右侧的五角星（Maple 内置资源图标）：
 /// 点击将当前目录加入或移出个人收藏。
 final class FavoriteStarButton: NSView {
 
-    /// 是否已收藏（已收藏时显示 QSpace Pro 原版实心黄星）。
+    /// 是否已收藏（已收藏时显示 Maple 内置实心黄星）。
     var isOn = false {
         didSet {
             guard oldValue != isOn else { return }

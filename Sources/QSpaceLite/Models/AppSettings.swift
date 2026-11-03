@@ -1,16 +1,66 @@
 import AppKit
 
-enum ViewMode: String, CaseIterable {
-    case list, icons, columns
+enum AppAppearance: String, CaseIterable {
+    case system = "system"
+    case dark   = "dark"
+    case light  = "light"
 
     var title: String {
         switch self {
-        case .list: return "列表"
-        case .icons: return "图标"
-        case .columns: return "分栏"
+        case .system: return "跟随系统".localized
+        case .dark:   return "深色".localized
+        case .light:  return "浅色".localized
+        }
+    }
+}
+
+enum SidebarIconSize: String, CaseIterable {
+    case small  = "small"
+    case medium = "medium"
+    case large  = "large"
+
+    var title: String {
+        switch self {
+        case .small:  return "小"
+        case .medium: return "中"
+        case .large:  return "大"
         }
     }
 
+    var dimension: CGFloat {
+        switch self {
+        case .small:  return 15
+        case .medium: return 18
+        case .large:  return 22
+        }
+    }
+}
+
+enum SidebarIconStyle: String, CaseIterable {
+    case colorful   = "colorful"
+    case minimalist = "minimalist"
+
+    var title: String {
+        switch self {
+        case .colorful:   return "彩色图标"
+        case .minimalist: return "简约图标"
+        }
+    }
+}
+
+enum ViewMode: String, CaseIterable {
+    case list    = "list"
+    case icons   = "icons"
+    case columns = "columns"
+
+    var title: String {
+        switch self {
+        case .list: return "列表".localized
+        case .icons: return "图标".localized
+        case .columns: return "分栏".localized
+        }
+    }
+ 
     var symbolName: String {
         switch self {
         case .list: return "list.bullet"
@@ -30,11 +80,11 @@ enum SidebarCategory: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .favorites: return "个人收藏"
+        case .favorites: return "个人收藏".localized
         case .icloud:    return "iCloud"
-        case .locations: return "位置"
-        case .servers:   return "服务器"
-        case .tags:      return "标签"
+        case .locations: return "位置".localized
+        case .servers:   return "服务器".localized
+        case .tags:      return "标签".localized
         }
     }
 }
@@ -78,7 +128,80 @@ struct ServerEntry: Codable, Equatable {
 
 /// 轻量偏好存储。全部落在 UserDefaults，启动时恢复上次状态。
 enum AppSettings {
-    private static let store = UserDefaults.standard
+    private static let store: UserDefaults = {
+        let s = UserDefaults.standard
+        let migrationKey = "__migrated_from_qspacelite_v1"
+        if !s.bool(forKey: migrationKey) {
+            s.set(true, forKey: migrationKey)
+            if let legacy = UserDefaults(suiteName: "com.workbuddy.qspacelite") {
+                let dict = legacy.dictionaryRepresentation()
+                for (key, val) in dict {
+                    if s.object(forKey: key) == nil {
+                        s.set(val, forKey: key)
+                    }
+                }
+                s.synchronize()
+            }
+        }
+        return s
+    }()
+
+    private static var _appearance: AppAppearance = {
+        guard let val = store.string(forKey: "appAppearance"),
+              let mode = AppAppearance(rawValue: val) else {
+            return .system
+        }
+        return mode
+    }()
+
+    /// 外观模式（跟随系统 / 黑色 / 亮色）
+    static var appearance: AppAppearance {
+        get { _appearance }
+        set {
+            _appearance = newValue
+            store.set(newValue.rawValue, forKey: "appAppearance")
+            applyAppearance()
+            NotificationCenter.default.post(name: .appearanceDidChange, object: nil)
+        }
+    }
+
+    private static var _language: AppLanguage = {
+        guard let val = store.string(forKey: "appLanguage"),
+              let lang = AppLanguage(rawValue: val) else {
+            return .system
+        }
+        return lang
+    }()
+
+    /// 界面语言设置（跟随系统 / 简体中文 / English / 繁體中文 / 日本語）
+    static var language: AppLanguage {
+        get { _language }
+        set {
+            _language = newValue
+            store.set(newValue.rawValue, forKey: "appLanguage")
+            NotificationCenter.default.post(name: .languageDidChange, object: nil)
+        }
+    }
+
+    /// 将当前设置的外观模式应用到全局及所有已打开窗口
+    static func applyAppearance() {
+        let appearanceObject: NSAppearance?
+        switch appearance {
+        case .system:
+            appearanceObject = nil
+        case .dark:
+            appearanceObject = NSAppearance(named: .darkAqua)
+        case .light:
+            appearanceObject = NSAppearance(named: .aqua)
+        }
+
+        NSApp?.appearance = appearanceObject
+        for window in NSApp?.windows ?? [] {
+            window.appearance = appearanceObject
+            window.contentView?.needsDisplay = true
+            window.contentView?.layoutSubtreeIfNeeded()
+        }
+    }
 
     static var showHidden: Bool {
         get { store.bool(forKey: "showHidden") }
@@ -88,14 +211,113 @@ enum AppSettings {
         }
     }
 
-    /// 是否在列表视图中显示斑马线交替底色（关闭时整行显示纯白背景）
-    private static var _showZebraStripes: Bool = (store.object(forKey: "showZebraStripes") as? Bool) ?? true
+    /// 是否在列表视图中显示斑马线交替底色（默认关闭，整行显示纯净底色）
+    private static var _showZebraStripes: Bool = (store.object(forKey: "showZebraStripes") as? Bool) ?? false
     static var showZebraStripes: Bool {
         get { _showZebraStripes }
         set {
             _showZebraStripes = newValue
             store.set(newValue, forKey: "showZebraStripes")
             NotificationCenter.default.post(name: .zebraStripesDidChange, object: nil)
+        }
+    }
+
+    /// 边栏图标尺寸（小 / 中 / 大）
+    private static var _sidebarIconSize: SidebarIconSize = {
+        guard let val = store.string(forKey: "sidebarIconSize"),
+              let size = SidebarIconSize(rawValue: val) else {
+            return .medium
+        }
+        return size
+    }()
+    static var sidebarIconSize: SidebarIconSize {
+        get { _sidebarIconSize }
+        set {
+            _sidebarIconSize = newValue
+            store.set(newValue.rawValue, forKey: "sidebarIconSize")
+            NotificationCenter.default.post(name: .sidebarIconSizeDidChange, object: nil)
+        }
+    }
+
+    /// 边栏图标风格（彩色图标 / 简约图标）
+    private static var _sidebarIconStyle: SidebarIconStyle = {
+        guard let val = store.string(forKey: "sidebarIconStyle"),
+              let style = SidebarIconStyle(rawValue: val) else {
+            return .colorful
+        }
+        return style
+    }()
+    static var sidebarIconStyle: SidebarIconStyle {
+        get { _sidebarIconStyle }
+        set {
+            _sidebarIconStyle = newValue
+            store.set(newValue.rawValue, forKey: "sidebarIconStyle")
+            NotificationCenter.default.post(name: .sidebarIconStyleDidChange, object: nil)
+        }
+    }
+
+    /// 当前激活窗格是否显示边框
+    private static var _showPaneBorder: Bool = (store.object(forKey: "showPaneBorder") as? Bool) ?? true
+    static var showPaneBorder: Bool {
+        get { _showPaneBorder }
+        set {
+            _showPaneBorder = newValue
+            store.set(newValue, forKey: "showPaneBorder")
+            NotificationCenter.default.post(name: .paneAppearanceDidChange, object: nil)
+        }
+    }
+
+    /// 当前激活窗格是否高亮地址栏
+    private static var _highlightPaneAddressBar: Bool = (store.object(forKey: "highlightPaneAddressBar") as? Bool) ?? true
+    static var highlightPaneAddressBar: Bool {
+        get { _highlightPaneAddressBar }
+        set {
+            _highlightPaneAddressBar = newValue
+            store.set(newValue, forKey: "highlightPaneAddressBar")
+            NotificationCenter.default.post(name: .paneAppearanceDidChange, object: nil)
+        }
+    }
+
+    /// 当前窗格是否保持圆角
+    private static var _keepPaneCornerRadius: Bool = (store.object(forKey: "keepPaneCornerRadius") as? Bool) ?? true
+    static var keepPaneCornerRadius: Bool {
+        get { _keepPaneCornerRadius }
+        set {
+            _keepPaneCornerRadius = newValue
+            store.set(newValue, forKey: "keepPaneCornerRadius")
+            NotificationCenter.default.post(name: .paneAppearanceDidChange, object: nil)
+        }
+    }
+
+    /// 侧边预览 / 是否显示项目详细信息
+    private static var _showItemInfo: Bool = (store.object(forKey: "showItemInfo") as? Bool) ?? true
+    static var showItemInfo: Bool {
+        get { _showItemInfo }
+        set {
+            _showItemInfo = newValue
+            store.set(newValue, forKey: "showItemInfo")
+            NotificationCenter.default.post(name: .itemInfoDidChange, object: nil)
+        }
+    }
+
+    /// 底部状态栏是否默认隐藏
+    private static var _hideBottomStatusBar: Bool = (store.object(forKey: "hideBottomStatusBar") as? Bool) ?? false
+    static var hideBottomStatusBar: Bool {
+        get { _hideBottomStatusBar }
+        set {
+            _hideBottomStatusBar = newValue
+            store.set(newValue, forKey: "hideBottomStatusBar")
+            NotificationCenter.default.post(name: .bottomStatusBarDidChange, object: nil)
+        }
+    }
+
+    /// 计算所有文件夹大小
+    private static var _calculateFolderSizes: Bool = (store.object(forKey: "calculateFolderSizes") as? Bool) ?? false
+    static var calculateFolderSizes: Bool {
+        get { _calculateFolderSizes }
+        set {
+            _calculateFolderSizes = newValue
+            store.set(newValue, forKey: "calculateFolderSizes")
         }
     }
 
@@ -107,6 +329,33 @@ enum AppSettings {
     static var viewMode: String {
         get { store.string(forKey: "viewMode") ?? ViewMode.list.rawValue }
         set { store.set(newValue, forKey: "viewMode") }
+    }
+
+    // MARK: - 预览窗格设置
+
+    /// 各种显示模式下是否开启右侧预览栏
+    /// 分栏模式默认开启 (true)，列表模式和图标模式默认关闭 (false)
+    static func isPreviewPaneVisible(for mode: ViewMode) -> Bool {
+        let key = "previewPane.\(mode.rawValue)"
+        if let val = store.object(forKey: key) as? Bool {
+            return val
+        }
+        return mode == .columns
+    }
+
+    static func setPreviewPaneVisible(_ visible: Bool, for mode: ViewMode) {
+        store.set(visible, forKey: "previewPane.\(mode.rawValue)")
+    }
+
+    /// 列表/图标模式下右侧预览栏的宽度（默认 260，最小 180，最大 600）
+    static var previewPaneWidth: CGFloat {
+        get {
+            let val = store.double(forKey: "previewPaneWidth")
+            return val >= 180 ? CGFloat(val) : 260
+        }
+        set {
+            store.set(Double(newValue), forKey: "previewPaneWidth")
+        }
     }
 
     static var sortField: String {
@@ -339,6 +588,18 @@ enum AppSettings {
         }
     }
 
+    /// 列表/详细列表的图标尺寸（16~32pt）。
+    static var listIconSize: CGFloat {
+        get {
+            let val = store.double(forKey: "listIconSize")
+            return val >= 16 ? CGFloat(val) : 16
+        }
+        set {
+            store.set(Double(newValue), forKey: "listIconSize")
+            store.set(Double(newValue + 8), forKey: "listRowHeight")
+        }
+    }
+
     /// 「查看显示选项」：列表视图的行高。
     static var listRowHeight: CGFloat {
         get {
@@ -434,7 +695,14 @@ enum AppSettings {
 }
 
 extension Notification.Name {
+    static let languageDidChange = Notification.Name("AppSettingsLanguageDidChange")
+    static let appearanceDidChange = Notification.Name("AppSettingsAppearanceDidChange")
     static let zebraStripesDidChange = Notification.Name("AppSettingsZebraStripesDidChange")
     static let favoritesDidChange = Notification.Name("AppSettingsFavoritesDidChange")
     static let gridIconSizeDidChange = Notification.Name("AppSettingsGridIconSizeDidChange")
+    static let sidebarIconSizeDidChange = Notification.Name("AppSettingsSidebarIconSizeDidChange")
+    static let sidebarIconStyleDidChange = Notification.Name("AppSettingsSidebarIconStyleDidChange")
+    static let paneAppearanceDidChange = Notification.Name("AppSettingsPaneAppearanceDidChange")
+    static let itemInfoDidChange = Notification.Name("AppSettingsItemInfoDidChange")
+    static let bottomStatusBarDidChange = Notification.Name("AppSettingsBottomStatusBarDidChange")
 }

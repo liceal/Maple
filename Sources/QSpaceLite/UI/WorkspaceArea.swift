@@ -7,18 +7,18 @@ enum LayoutMode: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .quad: return "四宫格"
-        case .dualV: return "左右两栏"
-        case .leftSplit: return "左二右一"
-        case .rightSplit: return "左一右二"
-        case .topSplit: return "上整下二"
-        case .bottomSplit: return "上二下整"
-        case .dualH: return "上下两行"
-        case .single: return "单窗格"
-        case .cols3: return "三列"
-        case .cols4: return "四列"
-        case .rows3: return "三行"
-        case .rows4: return "四行"
+        case .quad: return "四宫格".localized
+        case .dualV: return "左右两栏".localized
+        case .leftSplit: return "左二右一".localized
+        case .rightSplit: return "左一右二".localized
+        case .topSplit: return "上整下二".localized
+        case .bottomSplit: return "上二下整".localized
+        case .dualH: return "上下两行".localized
+        case .single: return "单窗格".localized
+        case .cols3: return "三列".localized
+        case .cols4: return "四列".localized
+        case .rows3: return "三行".localized
+        case .rows4: return "四行".localized
         }
     }
 
@@ -32,7 +32,7 @@ enum LayoutMode: String, CaseIterable {
     }
 
     /// 在给定矩形内画出布局示意图：一个直角外框 + 内部分隔线（格子之间无缝），
-    /// 风格与 QSpace Pro 的 icon_layout_template_* 一致（方正、无圆角、无格间边距）。
+    /// 风格与 Maple 的 icon_layout_template_* 一致（方正、无圆角、无格间边距）。
     /// 坐标系按「左上角为原点、y 向下」，与 normalizedCells 一致（图标视图 flipped，直接可用）。
     func drawIcon(in rect: NSRect, color: NSColor) {
         color.setStroke()
@@ -540,6 +540,14 @@ final class WorkspaceArea: NSView {
     /// 「查看显示选项」：列表行高实时应用到所有窗格。
     func applyRowHeight(_ height: CGFloat) {
         panes.forEach { $0.updateRowHeight(height) }
+    }
+
+    func undoAction() {
+        focusedPane?.undoAction()
+    }
+
+    func redoAction() {
+        focusedPane?.redoAction()
     }
 
     func saveState() {

@@ -78,6 +78,21 @@ final class FileListView: NSView {
         sessionWidths[column.rawValue] ?? column.width
     }
 
+    /// 列表图标尺寸（由右下角自适应滑块调节，16~32）
+    var iconSize: CGFloat = AppSettings.listIconSize {
+        didSet {
+            guard oldValue != iconSize else { return }
+            outline.reloadData()
+        }
+    }
+
+    func applyListSize(iconSize: CGFloat) {
+        self.iconSize = iconSize
+        self.rowHeight = max(20, iconSize + 6)
+        outline.rowHeight = self.rowHeight
+        outline.reloadData()
+    }
+
     /// 用户勾选要显示的列（按固定顺序排列）。
     static var selectedColumns: [ListColumn] {
         let enabled = Set(AppSettings.visibleColumns)
@@ -303,7 +318,17 @@ final class FileListView: NSView {
         outline.target = self
         outline.doubleAction = #selector(handleDoubleClick)
         outline.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
-        outline.menuProvider = { [weak self] _ in self?.menuProvider?(nil) }
+        outline.menuProvider = { [weak self] event in
+            guard let self else { return nil }
+            if let event {
+                let point = self.outline.convert(event.locationInWindow, from: nil)
+                let row = self.outline.row(at: point)
+                let item = (row >= 0) ? self.item(at: row) : nil
+                return self.menuProvider?(item)
+            } else {
+                return self.menuProvider?(nil)
+            }
+        }
         outline.onTriggerRename = { [weak self] row in self?.startRename(at: row) }
         outline.setAccessibilityLabel("文件列表")
         outline.registerForDraggedTypes([.fileURL])
@@ -333,6 +358,7 @@ final class FileListView: NSView {
         }
 
         header.translatesAutoresizingMaskIntoConstraints = false
+        header.wantsLayer = true
         header.onSort = { [weak self] field in self?.onSortChange?(field) }
         header.onContextMenu = { [weak self] in self?.makeColumnMenu() }
         addSubview(header)
@@ -359,6 +385,7 @@ final class FileListView: NSView {
         // 分隔线层最后添加 → 画在最上层（表头与列表内容之上），
         // 这样列间竖线从头到尾只有这一条，且不受单元格/分组行影响。
         dividerLayer.translatesAutoresizingMaskIntoConstraints = false
+        dividerLayer.wantsLayer = true
         dividerLayer.owner = self
         addSubview(dividerLayer)
 
@@ -395,11 +422,28 @@ final class FileListView: NSView {
         header.apply(layout: columnLayout, sort: sortField, ascending: ascending)
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        outline.backgroundColor = .controlBackgroundColor
+        scroll.backgroundColor = .controlBackgroundColor
+        outline.enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+        header.needsDisplay = true
+        dividerLayer.needsDisplay = true
+        needsDisplay = true
+    }
+
     // MARK: - 触摸板丝滑左右滑动手势（右滑回退 / 左滑前进）
 
     private func handleSwipeBegin() {
         outline.layer?.removeAllAnimations()
+        header.layer?.removeAllAnimations()
+        dividerLayer.layer?.removeAllAnimations()
         swipeBadge.layer?.removeAllAnimations()
+        swipeBadge.resetScale(animated: false)
+        swipeBadge.alphaValue = 0
+        swipeBadge.isHidden = true
     }
 
     private func handleSwipeChange(totalFingerDX: CGFloat) {
@@ -416,10 +460,18 @@ final class FileListView: NSView {
         let dampedShift = maxVisualShift * (1 - exp(-rawShift / max(1, maxVisualShift)))
         let signedShift = isRightSlide ? dampedShift : -dampedShift
 
+        // 表头、中缝竖线、列表正文整体联动平移，保持 100% 相对位置对齐，绝不偏移割裂
+        let t = CATransform3DMakeTranslation(signedShift, 0, 0)
+        let op: Float = allowed ? Float(max(0.86, 1.0 - (absDX / swipeTriggerThreshold) * 0.10)) : 1.0
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        outline.layer?.transform = CATransform3DMakeTranslation(signedShift, 0, 0)
-        outline.layer?.opacity = allowed ? Float(max(0.86, 1.0 - (absDX / swipeTriggerThreshold) * 0.10)) : 1.0
+        outline.layer?.transform = t
+        outline.layer?.opacity = op
+        header.layer?.transform = t
+        header.layer?.opacity = op
+        dividerLayer.layer?.transform = t
+        dividerLayer.layer?.opacity = op
         CATransaction.commit()
 
         guard allowed else {
@@ -428,20 +480,23 @@ final class FileListView: NSView {
             return
         }
 
-        let progress = min(1.35, absDX / swipeTriggerThreshold)
+        let progress = absDX / swipeTriggerThreshold
         let clamped = min(1.0, progress)
         let ready = absDX >= swipeTriggerThreshold
 
         swipeBadge.isHidden = false
-        swipeBadge.configure(isBack: isBack, progress: clamped, isArmed: ready)
-        swipeBadge.alphaValue = min(1.0, clamped * 1.25)
+        swipeBadge.configure(isBack: isBack, progress: progress, isArmed: ready)
+        // 透明度从浅变深：0.0 渐进平滑过渡至 1.0
+        swipeBadge.alphaValue = min(1.0, max(0.0, pow(clamped, 0.92)))
 
         let badgeD = SwipeIndicatorBadge.diameter
-        let travel: CGFloat = 18 + min(34, absDX * 0.34)
+        let startMargin: CGFloat = 8
+        let maxTravel: CGFloat = 28
+        let currentTravel = min(maxTravel, absDX * 0.28)
         if isRightSlide {
-            badgeLeadingConstraint.constant = -badgeD + travel
+            badgeLeadingConstraint.constant = startMargin + currentTravel
         } else {
-            badgeLeadingConstraint.constant = bounds.width - travel
+            badgeLeadingConstraint.constant = bounds.width - badgeD - startMargin - currentTravel
         }
     }
 
@@ -474,14 +529,17 @@ final class FileListView: NSView {
 
     private func animateTransitionAfterTrigger(isBack: Bool) {
         let entryOffset: CGFloat = isBack ? -36 : 36
+        let layersToAnimate = [outline.layer, header.layer, dividerLayer.layer].compactMap { $0 }
 
-        if let layer = outline.layer {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in layersToAnimate {
             layer.transform = CATransform3DIdentity
             layer.opacity = 1.0
-            CATransaction.commit()
+        }
+        CATransaction.commit()
 
+        for layer in layersToAnimate {
             let slide = CABasicAnimation(keyPath: "transform.translation.x")
             slide.fromValue = entryOffset
             slide.toValue = 0
@@ -502,30 +560,34 @@ final class FileListView: NSView {
     }
 
     private func animateCancelReset() {
-        if let layer = outline.layer {
-            let currentX = (layer.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? 0
-            let currentOpacity = layer.opacity
+        let layersToAnimate = [outline.layer, header.layer, dividerLayer.layer].compactMap { $0 }
+        let currentX = (outline.layer?.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? 0
+        let currentOpacity = outline.layer?.opacity ?? 1.0
 
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in layersToAnimate {
             layer.transform = CATransform3DIdentity
             layer.opacity = 1.0
-            CATransaction.commit()
+        }
+        CATransaction.commit()
 
-            if abs(currentX) > 0.5 {
+        if abs(currentX) > 0.5 {
+            for layer in layersToAnimate {
                 let spring = CABasicAnimation(keyPath: "transform.translation.x")
                 spring.fromValue = currentX
                 spring.toValue = 0
                 spring.duration = 0.18
                 spring.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
                 layer.add(spring, forKey: "swipeCancelResetX")
-            }
-            if currentOpacity < 0.99 {
-                let fade = CABasicAnimation(keyPath: "opacity")
-                fade.fromValue = currentOpacity
-                fade.toValue = 1.0
-                fade.duration = 0.15
-                layer.add(fade, forKey: "swipeCancelOpacity")
+
+                if currentOpacity < 0.99 {
+                    let fade = CABasicAnimation(keyPath: "opacity")
+                    fade.fromValue = currentOpacity
+                    fade.toValue = 1.0
+                    fade.duration = 0.15
+                    layer.add(fade, forKey: "swipeCancelOpacity")
+                }
             }
         }
         hideSwipeBadgeAnimated(triggered: false)
@@ -537,6 +599,9 @@ final class FileListView: NSView {
             ctx.duration = triggered ? 0.14 : 0.16
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             swipeBadge.animator().alphaValue = 0
+            if !triggered {
+                swipeBadge.resetScale(animated: true)
+            }
         }, completionHandler: { [weak self] in
             guard let self else { return }
             if self.swipeBadge.alphaValue == 0 {
@@ -564,114 +629,14 @@ final class FileListView: NSView {
         restoreSelection(previous)
     }
 
-    /// 搜索专用：将搜索命中的文件/文件夹还原为「父目录 ➔ 子目录 ➔ 命中项」的树状层级并自动展开。
-    /// 若命中项本身是文件夹（前 15 个高分文件夹），也会一并展开其下一级子项。
-    func updateWithSearchTree(items: [FileItem], baseFolder: URL?) {
+    /// 搜索专用列表展示：纯粹展示当前搜索命中的条目，不显示父级别，且全部初始保持折叠（不展开），用户点击三角可手动就地展开
+    func updateWithSearchResults(_ items: [FileItem]) {
+        let previous = selectedURLs()
         self.sections = [FileSection(title: "", rank: 0, items: items)]
-        guard !items.isEmpty else {
-            topLevel = []
-            outline.reloadData()
-            return
-        }
-
-        let homePath = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
-        let baseStdPath = baseFolder?.standardizedFileURL.path
-
-        var nodesByPath: [String: FileNode] = [:]
-        var rootNodes: [FileNode] = []
-        var rootNodeSet: Set<String> = []
-        var pathsToAutoExpand: [FileNode] = []
-
-        func getOrCreateNode(forPath path: String, fallbackItem: FileItem?) -> FileNode {
-            if let existing = nodesByPath[path] {
-                return existing
-            }
-            let url = URL(fileURLWithPath: path)
-            let fItem = fallbackItem ?? FileItem(
-                fastURL: url,
-                name: url.lastPathComponent.isEmpty ? path : url.lastPathComponent,
-                isDirectory: true,
-                isPackage: false,
-                size: 0,
-                modified: Date()
-            )
-            let node = FileNode(item: fItem)
-            nodesByPath[path] = node
-            return node
-        }
-
-        let displayItems = Array(items.prefix(120))
-        var expandedHitFolders = 0
-
-        for hitItem in displayItems {
-            let fullPath = hitItem.url.standardizedFileURL.path
-
-            // 计算该命中项在搜索树中的展示起点目录（最多向上追溯 3 层父目录，或追溯到当前限定文件夹）
-            var chainPaths: [String] = []
-            var cursor = fullPath
-            var steps = 0
-            while true {
-                chainPaths.append(cursor)
-                let parent = (cursor as NSString).deletingLastPathComponent
-                if parent.isEmpty || parent == cursor || parent == "/" { break }
-                if let base = baseStdPath, parent == base { break }
-                if baseStdPath == nil && (parent == homePath || parent == "/Applications") { break }
-                if steps >= 3 { break }
-                cursor = parent
-                steps += 1
-            }
-            chainPaths.reverse()
-
-            var parentNode: FileNode?
-            for (idx, p) in chainPaths.enumerated() {
-                let isLeaf = (idx == chainPaths.count - 1)
-                let node = getOrCreateNode(forPath: p, fallbackItem: isLeaf ? hitItem : nil)
-                if idx == 0 {
-                    if !rootNodeSet.contains(p) {
-                        rootNodeSet.insert(p)
-                        rootNodes.append(node)
-                    }
-                } else if let pNode = parentNode {
-                    if pNode.children == nil { pNode.children = [] }
-                    if !(pNode.children!.contains { $0.item.url.standardizedFileURL.path == p }) {
-                        pNode.children!.append(node)
-                    }
-                    if !pathsToAutoExpand.contains(where: { $0 === pNode }) {
-                        pathsToAutoExpand.append(pNode)
-                    }
-                }
-                parentNode = node
-            }
-
-            // 如果搜索命中的本身是一个文件夹，自动为前 10 个命中文件夹读取并展开一层子内容
-            if hitItem.isNavigable, expandedHitFolders < 10, let leafNode = parentNode {
-                expandedHitFolders += 1
-                if leafNode.children == nil {
-                    let subItems = FileItem.contents(of: hitItem.url, showHidden: AppSettings.showHidden)
-                    let limitedSubs = Array(subItems.prefix(25))
-                    if !limitedSubs.isEmpty {
-                        leafNode.children = limitedSubs.map { FileNode(item: $0) }
-                        if !pathsToAutoExpand.contains(where: { $0 === leafNode }) {
-                            pathsToAutoExpand.append(leafNode)
-                        }
-                    }
-                }
-            }
-        }
-
-        topLevel = rootNodes
+        self.expandedPaths.removeAll()
+        self.topLevel = items.map { FileNode(item: $0) }
         outline.reloadData()
-
-        // 按从浅到深顺序展开所有树节点
-        for node in pathsToAutoExpand {
-            outline.expandItem(node)
-            expandedPaths.insert(node.item.url.path)
-        }
-
-        // 默认选中第一条真正的搜索命中项
-        if let firstHit = items.first {
-            select(urls: [firstHit.url])
-        }
+        restoreSelection(previous)
     }
 
     var items: [FileItem] { sections.flatMap { $0.items } }
@@ -973,6 +938,10 @@ final class FileListView: NSView {
 
 extension FileListView: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
+    func deselectAll() {
+        outline.deselectAll(nil)
+    }
+
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
         if item == nil { return topLevel.count }
         if let node = node(of: item) { return children(of: node).count }
@@ -991,7 +960,7 @@ extension FileListView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool {
-        item is GroupNode
+        false
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
@@ -999,15 +968,21 @@ extension FileListView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        item is GroupNode ? Theme.groupRowHeight : rowHeight
+        if item is GroupNode {
+            let row = outlineView.row(forItem: item)
+            return row <= 0 ? 22 : 28
+        }
+        return rowHeight
     }
 
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
         if item is GroupNode {
+            let row = outlineView.row(forItem: item)
             let identifier = NSUserInterfaceItemIdentifier("GroupTableRowView")
             let rowView = (outlineView.makeView(withIdentifier: identifier, owner: self) as? GroupTableRowView)
                 ?? GroupTableRowView()
             rowView.identifier = identifier
+            rowView.isFirstGroup = (row <= 0)
             return rowView
         }
         let identifier = NSUserInterfaceItemIdentifier("FileListRowView")
@@ -1019,10 +994,11 @@ extension FileListView: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         if let group = item as? GroupNode {
+            let row = outlineView.row(forItem: item)
             let identifier = NSUserInterfaceItemIdentifier("group")
             let cell = (outlineView.makeView(withIdentifier: identifier, owner: self) as? GroupRowCell)
                 ?? GroupRowCell(identifier: identifier)
-            cell.configure(title: group.title, count: group.count)
+            cell.configure(title: group.title, count: group.count, isFirst: row <= 0)
             return cell
         }
         guard let node = node(of: item) else { return nil }
@@ -1338,21 +1314,39 @@ final class KeyTableView: NSTableView {
 
 /// 分组标题行视图：完全独立于斑马线，始终使用统一纯色底色与顶部细腻分隔线
 final class GroupTableRowView: NSTableRowView {
+    var isFirstGroup: Bool = false
+    override var isFlipped: Bool { true }
+
     override func drawBackground(in dirtyRect: NSRect) {
         Theme.paneBackground.setFill()
         bounds.fill()
 
-        Theme.hairline.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+        if !isFirstGroup {
+            Theme.hairline.setFill()
+            NSRect(x: 10, y: 0, width: bounds.width - 20, height: 1).fill()
+        }
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
         // 分组标题行不可选中
     }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 }
 
-/// 列表文件行视图：支持组内独立斑马线交替底色与访达同款圆角高亮
+/// 列表文件行视图：支持组内独立斑马线交替底色与四边拉满高亮（树形/列表视图四边拉满无圆角，圆角仅保留给分栏视图）
 final class FileListRowView: ColumnTableRowView {
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard isSelected else { return }
+        let color = isEmphasized ? NSColor.selectedContentBackgroundColor : NSColor.unemphasizedSelectedContentBackgroundColor
+        color.setFill()
+        bounds.fill()
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         let baseColor = NSColor.controlBackgroundColor
         guard AppSettings.showZebraStripes else {
@@ -1998,8 +1992,11 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
     func isPointInName(_ pointInOutline: NSPoint, in outline: NSOutlineView) -> Bool {
         let local = convert(pointInOutline, from: outline)
         guard local.y >= 0 && local.y <= bounds.height else { return false }
-        // 排除左侧图标和展开三角（小于 nameTextX - 4，大约 38pt）
-        if local.x < FileListView.nameTextX - 4 { return false }
+        let currentOwner = owner
+        let nameIconX: CGFloat = FileListView.nameIconX
+        let nameTextX: CGFloat = nameIconX + (currentOwner?.iconSize ?? Theme.listIconSize) + 6
+        // 排除左侧图标和展开三角（小于 nameTextX - 4）
+        if local.x < nameTextX - 4 { return false }
         // 排除右侧其他属性列（大小/修改日期等）
         let dx = convert(NSPoint.zero, to: owner).x
         let nameRight = (owner?.columnLayout.nameRect.maxX ?? 300) - dx
@@ -2032,6 +2029,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         title.delegate = self
 
         if let editor = title.currentEditor() as? NSTextView {
+            editor.allowsUndo = true
             editor.textColor = .labelColor
             editor.insertionPointColor = .labelColor
             editor.drawsBackground = false
@@ -2055,6 +2053,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
             self.isStartingEditing = false
             self.title.textColor = .labelColor
             if let editor = self.title.currentEditor() as? NSTextView {
+                editor.allowsUndo = true
                 editor.textColor = .labelColor
                 editor.insertionPointColor = .labelColor
                 var attrs = editor.typingAttributes
@@ -2103,6 +2102,12 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         } else if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             endInlineEditing(commit: false)
             return true
+        } else if commandSelector == Selector(("undo:")) {
+            textView.undoManager?.undo()
+            return true
+        } else if commandSelector == Selector(("redo:")) {
+            textView.undoManager?.redo()
+            return true
         }
         return false
     }
@@ -2132,14 +2137,17 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         let layout = owner.columnLayout
         let dx = convert(NSPoint.zero, to: owner).x
 
-        let iconSize = Theme.listIconSize
-        icon.frame = NSRect(x: FileListView.nameIconX,
+        let iconSize = owner.iconSize
+        let nameIconX: CGFloat = FileListView.nameIconX
+        let nameTextX: CGFloat = nameIconX + iconSize + 6
+
+        icon.frame = NSRect(x: nameIconX,
                             y: (rowHeight - iconSize) / 2,
                             width: iconSize, height: iconSize)
         let nameRight = layout.nameRect.maxX - 8
-        let textHeight: CGFloat = isInlineEditing ? 21 : 17
-        let nameX = FileListView.nameTextX - (isInlineEditing ? 3 : 0)
-        let maxAvailableWidth = max(50, nameRight - FileListView.nameTextX - dx + (isInlineEditing ? 3 : 0))
+        let textHeight: CGFloat = isInlineEditing ? max(21, iconSize + 4) : 17
+        let nameX = nameTextX - (isInlineEditing ? 3 : 0)
+        let maxAvailableWidth = max(50, nameRight - nameTextX - dx + (isInlineEditing ? 3 : 0))
 
         let titleWidth: CGFloat
         if isInlineEditing {
@@ -2148,7 +2156,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
             // 访达同款：紧凑自适应文本宽度 + 内边距光标缓冲，且不超过列右边界
             titleWidth = min(maxAvailableWidth, max(50, ceil(textW) + 18))
         } else {
-            titleWidth = max(0, nameRight - FileListView.nameTextX - dx)
+            titleWidth = max(0, nameRight - nameTextX - dx)
         }
 
         title.frame = NSRect(x: nameX,
@@ -2232,15 +2240,52 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         icon.image = IconCache.shared.icon(for: item)
         title.stringValue = item.name
         for (column, label) in valueLabels {
-            label.stringValue = column.value(for: item)
+            configureLabel(label, for: column, item: item)
         }
         updateColors()
         updateFrames()
     }
 
+    private func configureLabel(_ label: NSTextField, for column: ListColumn, item: FileItem) {
+        if column == .size {
+            if item.isPackage {
+                if let cached = BundleSizeCache.shared.size(for: item.url) {
+                    label.stringValue = Format.bytes(cached)
+                } else {
+                    label.stringValue = "--"
+                    BundleSizeCache.shared.requestSize(for: item.url) { [weak self, weak label] size in
+                        guard let self, let label, self.item?.url == item.url else { return }
+                        label.stringValue = Format.bytes(size)
+                    }
+                }
+                return
+            } else if item.isNavigable {
+                if AppSettings.calculateFolderSizes {
+                    if let cached = BundleSizeCache.shared.size(for: item.url) {
+                        label.stringValue = Format.bytes(cached)
+                    } else {
+                        label.stringValue = "--"
+                        BundleSizeCache.shared.requestSize(for: item.url) { [weak self, weak label] size in
+                            guard let self, let label, self.item?.url == item.url else { return }
+                            label.stringValue = Format.bytes(size)
+                        }
+                    }
+                    return
+                } else {
+                    label.stringValue = "--"
+                    return
+                }
+            }
+        }
+        label.stringValue = column.value(for: item)
+    }
+
     /// 按需创建某一列的标签（列显示设置随时可变，缺哪列补哪列）。
     private func makeValueLabel(for column: ListColumn, item: FileItem?) -> NSTextField {
-        let label = NSTextField(labelWithString: item.map { column.value(for: $0) } ?? "")
+        let label = NSTextField(labelWithString: "")
+        if let item {
+            configureLabel(label, for: column, item: item)
+        }
         label.translatesAutoresizingMaskIntoConstraints = true
         label.autoresizingMask = []
         label.font = .systemFont(ofSize: 11.5)
@@ -2255,6 +2300,8 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
 private final class GroupRowCell: NSTableCellView {
     private let label = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
+    var isFirstGroup: Bool = false
+    override var isFlipped: Bool { true }
 
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
@@ -2277,12 +2324,14 @@ private final class GroupRowCell: NSTableCellView {
 
     override func layout() {
         super.layout()
-        let y = max(0, bounds.height - 15)
-        label.frame = NSRect(x: 10, y: y, width: 220, height: 14)
-        countLabel.frame = NSRect(x: 10 + label.intrinsicContentSize.width + 6, y: y, width: 60, height: 14)
+        let textH: CGFloat = 14
+        let y = isFirstGroup ? (bounds.height - textH) / 2 : bounds.height - textH - 4
+        label.frame = NSRect(x: 12, y: y, width: 220, height: textH)
+        countLabel.frame = NSRect(x: 12 + label.intrinsicContentSize.width + 6, y: y, width: 60, height: textH)
     }
 
-    func configure(title: String, count: Int) {
+    func configure(title: String, count: Int, isFirst: Bool) {
+        self.isFirstGroup = isFirst
         label.stringValue = title.uppercased()
         countLabel.stringValue = "\(count)"
         needsLayout = true

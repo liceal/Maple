@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "QSpaceLite",
+    name: "Maple",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "QSpaceLite",
+            name: "Maple",
             path: "Sources/QSpaceLite"
         ),
         .executableTarget(

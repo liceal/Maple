@@ -38,7 +38,17 @@ struct FileItem: Hashable {
         self.isPackage = values.isPackage ?? false
         self.isSymbolicLink = values.isSymbolicLink ?? false
         self.isHidden = values.isHidden ?? false
-        self.size = Int64(values.fileSize ?? 0)
+        if self.isPackage {
+            if let cached = BundleSizeCache.shared.size(for: url) {
+                self.size = cached
+            } else {
+                self.size = -1
+            }
+        } else if self.isDirectory {
+            self.size = 0
+        } else {
+            self.size = Int64(values.fileSize ?? 0)
+        }
         self.modified = values.contentModificationDate ?? .distantPast
         self.created = values.creationDate ?? .distantPast
         self.kind = values.localizedTypeDescription ?? ""
@@ -65,16 +75,91 @@ struct FileItem: Hashable {
         self.kind = IconCache.shared.kindDescription(forName: name, isDirectory: isDirectory, isPackage: isPackage)
     }
 
+    /// 判断是否是废纸篓路径
+    static func isTrash(url: URL) -> Bool {
+        if url.lastPathComponent == ".Trash" || url.path.hasSuffix("/.Trash") {
+            return true
+        }
+        let homeTrash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+        return url.standardizedFileURL.path == homeTrash.standardizedFileURL.path
+    }
+
+    /// 检查废纸篓底层直接访问权限
+    static func checkTrashPermission() -> Bool {
+        let homeTrash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+        do {
+            _ = try FileManager.default.contentsOfDirectory(at: homeTrash, includingPropertiesForKeys: nil, options: [])
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 请求自动化控制 Finder 权限（弹出系统级授权弹窗）
+    static func requestFinderAutomationPermission() {
+        var aeDesc = AEDesc()
+        let bundleID = "com.apple.finder"
+        let status = bundleID.withCString { cStr in
+            AECreateDesc(typeApplicationBundleID, cStr, strlen(cStr), &aeDesc)
+        }
+        if status == noErr {
+            _ = AEDeterminePermissionToAutomateTarget(&aeDesc, typeWildCard, typeWildCard, true)
+            AEDisposeDesc(&aeDesc)
+        }
+    }
+
+    /// 通过 Finder AppleScript 实时读取系统废纸篓（兼顾本地 ~/.Trash 与 iCloud Trash，并穿透 macOS TCC 限制）
+    static func trashURLsFromFinder(showHidden: Bool = false) -> [URL] {
+        requestFinderAutomationPermission()
+        let script = "tell application \"Finder\" to get URL of every item of trash"
+        guard let appleScript = NSAppleScript(source: script) else { return [] }
+        var error: NSDictionary?
+        let descriptor = appleScript.executeAndReturnError(&error)
+        if let error {
+            NSLog("Maple: trashURLsFromFinder error: %@", error)
+            return []
+        }
+        var urls: [URL] = []
+        let count = descriptor.numberOfItems
+        if count > 0 {
+            for i in 1...count {
+                if let itemDesc = descriptor.atIndex(i),
+                   let urlString = itemDesc.stringValue,
+                   let url = URL(string: urlString) {
+                    if showHidden || !url.lastPathComponent.hasPrefix(".") {
+                        urls.append(url)
+                    }
+                }
+            }
+        }
+        return urls
+    }
+
     /// 读取目录内容（不递归）。
     static func contents(of directory: URL, showHidden: Bool) -> [FileItem] {
         var options: FileManager.DirectoryEnumerationOptions = []
         if !showHidden { options.insert(.skipsHiddenFiles) }
-        guard let urls = try? FileManager.default.contentsOfDirectory(
+
+        // 1. 常规 FileManager 读取
+        if let urls = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: resourceKeys,
             options: options
-        ) else { return [] }
-        return urls.compactMap(FileItem.init(url:))
+        ) {
+            if !urls.isEmpty || !isTrash(url: directory) {
+                return urls.compactMap(FileItem.init(url:))
+            }
+        }
+
+        // 2. 废纸篓读取：受 macOS TCC 隐私保护时 FileManager 读取 ~/.Trash 权限受限，回退到通过 Finder 读取
+        if isTrash(url: directory) {
+            let trashURLs = trashURLsFromFinder(showHidden: showHidden)
+            if !trashURLs.isEmpty {
+                return trashURLs.compactMap(FileItem.init(url:))
+            }
+        }
+
+        return []
     }
 
     static func == (lhs: FileItem, rhs: FileItem) -> Bool { lhs.url == rhs.url }

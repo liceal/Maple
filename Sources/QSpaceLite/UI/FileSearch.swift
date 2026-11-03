@@ -102,11 +102,35 @@ final class FileSearchEngine {
 
     // MARK: - 索引构建与磁盘缓存
 
-    private static var cacheURL: URL {
+    static var cacheURL: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         return base.appendingPathComponent("com.qspacelite.app", isDirectory: true)
             .appendingPathComponent("fast-index-v2.tsv")
+    }
+
+    /// 当前索引磁盘缓存占用大小（字节）。
+    var diskCacheSizeBytes: Int64 {
+        let url = Self.cacheURL
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int64 else {
+            return 0
+        }
+        return size
+    }
+
+    /// 格式化后的当前索引大小描述（如 "8.0 MB"）。
+    var formattedIndexSize: String {
+        let bytes = diskCacheSizeBytes
+        if bytes > 0 {
+            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+        let count = indexedCount
+        if count > 0 {
+            let estimated = Int64(count) * 85
+            return ByteCountFormatter.string(fromByteCount: estimated, countStyle: .file)
+        }
+        return "0 KB"
     }
 
     /// 当前内存索引中的文件/目录总数。
@@ -140,6 +164,12 @@ final class FileSearchEngine {
     }
 
     private func readCache() {
+        // 清理早期版本残留的废弃索引文件，释放磁盘空间
+        let legacyFile = Self.cacheURL.deletingLastPathComponent().appendingPathComponent("name-index.txt")
+        if FileManager.default.fileExists(atPath: legacyFile.path) {
+            try? FileManager.default.removeItem(at: legacyFile)
+        }
+
         guard let data = try? Data(contentsOf: Self.cacheURL),
               let text = String(data: data, encoding: .utf8) else { return }
         var loaded = ContiguousArray<Entry>()

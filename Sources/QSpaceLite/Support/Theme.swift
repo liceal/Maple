@@ -19,15 +19,16 @@ enum Theme {
     // MARK: - 颜色
 
     static let sidebarBackground = NSColor.windowBackgroundColor
-    /// 内容区背景：向侧栏灰（windowBackgroundColor）靠拢，整体更灰一些、但略浅于侧栏，
-    /// 让窗格/顶部条与左栏视觉接近又保留一点区分。
-    static let paneBackground: NSColor = {
-        let base = NSColor.controlBackgroundColor.usingColorSpace(.sRGB)
-            ?? NSColor.controlBackgroundColor
-        let gray = NSColor.windowBackgroundColor.usingColorSpace(.sRGB)
-            ?? NSColor.windowBackgroundColor
-        return base.blended(withFraction: 0.5, of: gray) ?? base
-    }()
+    /// 内容区/工具栏背景：动态适配浅色与深色外观，
+    /// 深色模式下为深灰 (0.13)，浅色模式下为原生浅灰 (0.96)，让窗格与顶部条视觉统一。
+    static let paneBackground: NSColor = NSColor(name: "ThemePaneBackground") { appearance in
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if isDark {
+            return NSColor(calibratedWhite: 0.13, alpha: 1.0)
+        } else {
+            return NSColor(calibratedWhite: 0.96, alpha: 1.0)
+        }
+    }
     static let hairline = NSColor.separatorColor
     static let focusRing = NSColor.controlAccentColor
 
@@ -46,7 +47,7 @@ enum Theme {
         symbol("ellipsis", size: 15, weight: .semibold)
     }
 
-    /// 缓存从 Bundle / Resources 加载的 QSpace Pro 原版特殊目录彩色图标（含 24x24 @1x 与 48x48 @2x）及按尺寸缩放后的副本。
+    /// 缓存从 Bundle / Resources 加载的特殊目录彩色图标（含 24x24 @1x 与 48x48 @2x）及按尺寸缩放后的副本。
     private static var specialIconCache: [String: NSImage] = [:]
     private static var sizedIconCache: [String: NSImage] = [:]
     private static let devResourcesDir: URL = URL(fileURLWithPath: #filePath)
@@ -71,41 +72,45 @@ enum Theme {
             home + "/Applications": "icon_sidebar_apps_folder",
             "/System/Applications": "icon_sidebar_apps_folder",
             home + "/Library/Mobile Documents/com~apple~CloudDocs": "icon_icloud_small",
+            home + "/.Trash": "icon_trash_small",
             "/Network": "icon_sidebar_net_host"
         ]
     }()
 
-    private static func loadBundledTiffIcon(_ name: String) -> NSImage? {
-        if let cached = specialIconCache[name] { return cached }
-        if let url = Bundle.main.url(forResource: name, withExtension: "tiff"),
-           let img = NSImage(contentsOf: url) {
-            img.isTemplate = false
-            specialIconCache[name] = img
-            return img
+    private static func loadBundledTiffIcon(_ name: String, asTemplate: Bool = false) -> NSImage? {
+        let key = asTemplate ? "\(name)_tpl" : name
+        if let cached = specialIconCache[key] { return cached }
+        let load = { () -> NSImage? in
+            if let url = Bundle.main.url(forResource: name, withExtension: "tiff"),
+               let img = NSImage(contentsOf: url) {
+                return img
+            }
+            let devURL = devResourcesDir.appendingPathComponent("\(name).tiff")
+            if let img = NSImage(contentsOf: devURL) {
+                return img
+            }
+            return nil
         }
-        let devURL = devResourcesDir.appendingPathComponent("\(name).tiff")
-        if let img = NSImage(contentsOf: devURL) {
-            img.isTemplate = false
-            specialIconCache[name] = img
-            return img
-        }
-        return nil
+        guard let img = load() else { return nil }
+        img.isTemplate = asTemplate
+        specialIconCache[key] = img
+        return img
     }
 
-    private static func sizedBundledIcon(_ name: String, size: CGFloat) -> NSImage? {
-        let cacheKey = "\(name)_\(Int(size * 2))"
+    static func sizedBundledIcon(_ name: String, size: CGFloat, asTemplate: Bool = false) -> NSImage? {
+        let cacheKey = "\(name)_\(Int(size * 2))_\(asTemplate)"
         if let cached = sizedIconCache[cacheKey] { return cached }
-        guard let base = loadBundledTiffIcon(name),
+        guard let base = loadBundledTiffIcon(name, asTemplate: asTemplate),
               let copy = base.copy() as? NSImage else {
             return nil
         }
         copy.size = NSSize(width: size, height: size)
-        copy.isTemplate = false
+        copy.isTemplate = asTemplate
         sizedIconCache[cacheKey] = copy
         return copy
     }
 
-    /// 根据目录 URL 返回 QSpace Pro 同款彩色特殊目录图标（主目录、桌面、文稿、下载、影片、音乐、图片、应用程序、iCloud 云盘、网络）；
+    /// 根据目录 URL 返回原生彩色特殊目录图标（主目录、桌面、文稿、下载、影片、音乐、图片、应用程序、iCloud 云盘、网络）；
     /// 普通目录返回 `nil`。所有图标均已去除多余透明边距，视觉尺寸与磁盘图标一致。
     static func specialFolderIcon(for url: URL, size: CGFloat = 16) -> NSImage? {
         let stdPath = url.standardizedFileURL.path
@@ -116,6 +121,8 @@ enum Theme {
                   let vals = try? url.resourceValues(forKeys: [.volumeIsLocalKey]),
                   vals.volumeIsLocal == false {
             resourceName = "icon_sidebar_net_host"
+        } else if stdPath.hasSuffix("/.Trash") || url.lastPathComponent == ".Trash" || url.lastPathComponent == "Trash" {
+            resourceName = "icon_trash_full_small"
         } else {
             resourceName = nil
         }
@@ -134,7 +141,7 @@ enum Theme {
         return symbol("network", size: size - 3, weight: .regular) ?? NSImage()
     }
 
-    /// 彩色小房子图标（🏠）：直接采用 QSpace Pro 同款 `icon_sidebar_home_folder.tiff` 图标。
+    /// 彩色小房子图标（🏠）：优先加载本地高精矢量资源 `icon_sidebar_home_folder.tiff`。
     static func colorfulHomeIcon(size: CGFloat = 16) -> NSImage {
         if let icon = sizedBundledIcon("icon_sidebar_home_folder", size: size) {
             return icon
@@ -145,8 +152,130 @@ enum Theme {
         return fallback
     }
 
-    /// QSpace Pro 原版地址栏收藏五角星图标：
-    /// - 未收藏（浅色模式）：`icon_favorite.tiff`（深灰空心星标，与 QSpace Pro 完全一致）
+    /// 简约风边栏图标（极简单色线条图标）
+    static func minimalistSidebarIcon(for node: SidebarNode, size: CGFloat = 18) -> NSImage {
+        // 1. 废纸篓
+        if node.isTrash {
+            if let icon = sizedBundledIcon("icon_trash_small", size: size, asTemplate: true) {
+                return icon
+            }
+        }
+
+        // 2. 检查 URL 对应的特殊目录或路径
+        if let url = node.url {
+            let stdPath = url.standardizedFileURL.path
+            let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+
+            if stdPath == home {
+                if let icon = sizedBundledIcon("icon_tpl_home_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Desktop" {
+                if let icon = sizedBundledIcon("icon_tpl_desktop_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Documents" {
+                if let icon = sizedBundledIcon("icon_tpl_doc_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Downloads" {
+                if let icon = sizedBundledIcon("icon_tpl_download_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Movies" {
+                if let icon = sizedBundledIcon("icon_tpl_movie_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Music" {
+                if let icon = sizedBundledIcon("icon_tpl_music_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Pictures" {
+                if let icon = sizedBundledIcon("icon_tpl_picture_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == "/Applications" || stdPath == home + "/Applications" || stdPath == "/System/Applications" {
+                if let icon = sizedBundledIcon("icon_tpl_apps_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == home + "/Library/Mobile Documents/com~apple~CloudDocs" {
+                if let icon = sizedBundledIcon("icon_tpl_icloud_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if stdPath == "/" {
+                // 本地根系统卷 (Macintosh HD)
+                if let icon = sizedBundledIcon("icon_tpl_indisk_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            }
+
+            // 识别常见云盘 (OneDrive, Dropbox, Google Drive)
+            let lowerPath = stdPath.lowercased()
+            let lowerTitle = node.title.lowercased()
+            if lowerPath.contains("onedrive") || lowerTitle.contains("onedrive") {
+                if let icon = sizedBundledIcon("icon_tpl_onedrive_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if lowerPath.contains("dropbox") || lowerTitle.contains("dropbox") {
+                if let icon = sizedBundledIcon("icon_tpl_dropbox_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            } else if lowerPath.contains("google drive") || lowerPath.contains("googledrive") || lowerTitle.contains("google") {
+                if let icon = sizedBundledIcon("icon_tpl_googledrive_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            }
+
+            // 可推出卷 / DMG / 外部存储设备
+            if node.isEjectableVolume {
+                if let icon = sizedBundledIcon("icon_tpl_rmdisk_small", size: size, asTemplate: true) {
+                    return icon
+                }
+            }
+
+            // 本地其它磁盘卷
+            if stdPath.hasPrefix("/Volumes/") {
+                if let vals = try? url.resourceValues(forKeys: [.volumeIsLocalKey]), vals.volumeIsLocal == false {
+                    if let icon = sizedBundledIcon("icon_tpl_net_host_small", size: size, asTemplate: true) {
+                        return icon
+                    }
+                } else {
+                    if let icon = sizedBundledIcon("icon_tpl_rmdisk_small", size: size, asTemplate: true) {
+                        return icon
+                    }
+                }
+            }
+        }
+
+        // 3. 网络服务器
+        if node.kind == .server {
+            let lower = (node.serverEntry?.urlString ?? "").lowercased()
+            let resName = lower.hasPrefix("vnc://") ? "icon_tpl_vnc_small" : "icon_tpl_net_host_small"
+            if let icon = sizedBundledIcon(resName, size: size, asTemplate: true) {
+                return icon
+            }
+        }
+
+        // 4. 用户自定义收藏文件夹或其它普通文件夹：使用通用简约文件夹图标
+        if node.kind == .folder {
+            if let icon = sizedBundledIcon("icon_tpl_folder_small", size: size, asTemplate: true) {
+                return icon
+            }
+        }
+
+        // 5. Fallback 到 SF Symbol
+        if !node.symbol.isEmpty, let sym = symbol(node.symbol, size: size - 3) {
+            sym.isTemplate = true
+            return sym
+        }
+
+        let fallback = symbol("folder", size: size - 3) ?? NSImage()
+        fallback.isTemplate = true
+        return fallback
+    }
+
+    /// 地址栏收藏五角星图标：
+    /// - 未收藏（浅色模式）：`icon_favorite.tiff`（深灰空心星标）
     /// - 未收藏（深色模式）：`icon_favorite_dark.tiff`（银灰空心星标）
     /// - 已收藏：`icon_favorite_on.tiff`（黄色实心星标）
     static func favoriteStarIcon(isOn: Bool, isDark: Bool = false) -> NSImage? {
@@ -223,6 +352,52 @@ enum Theme {
         }
         img.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
         img.resizingMode = .stretch
+        return img
+    }
+
+    /// 原生风格「右侧预览窗格」图标（外框圆角矩形 + 竖分割线 + 右侧缩略图方块 + 文本线条）
+    static var previewPaneIcon: NSImage {
+        let size = NSSize(width: 17, height: 13)
+        let img = NSImage(size: size, flipped: false) { rect in
+            let strokeColor = NSColor.black
+            strokeColor.setStroke()
+            strokeColor.setFill()
+
+            // 1. 外层圆角矩形
+            let outerRect = NSRect(x: 1, y: 1, width: 15, height: 11)
+            let outerPath = NSBezierPath(roundedRect: outerRect, xRadius: 2.2, yRadius: 2.2)
+            outerPath.lineWidth = 1.2
+            outerPath.stroke()
+
+            // 2. 中间竖直分割线（将左边主区域与右侧预览区分隔开）
+            let splitX: CGFloat = 10.0
+            let splitPath = NSBezierPath()
+            splitPath.move(to: NSPoint(x: splitX, y: 1.6))
+            splitPath.line(to: NSPoint(x: splitX, y: 11.4))
+            splitPath.lineWidth = 1.0
+            splitPath.stroke()
+
+            // 3. 右侧上部小方块（缩略图）
+            let thumbRect = NSRect(x: 11.6, y: 6.8, width: 3.2, height: 3.2)
+            let thumbPath = NSBezierPath(roundedRect: thumbRect, xRadius: 0.6, yRadius: 0.6)
+            thumbPath.fill()
+
+            // 4. 右侧下部两条横线（属性文本）
+            let line1 = NSBezierPath()
+            line1.move(to: NSPoint(x: 11.6, y: 4.5))
+            line1.line(to: NSPoint(x: 14.8, y: 4.5))
+            line1.lineWidth = 0.9
+            line1.stroke()
+
+            let line2 = NSBezierPath()
+            line2.move(to: NSPoint(x: 11.6, y: 2.7))
+            line2.line(to: NSPoint(x: 14.8, y: 2.7))
+            line2.lineWidth = 0.9
+            line2.stroke()
+
+            return true
+        }
+        img.isTemplate = true
         return img
     }
 }
@@ -341,6 +516,15 @@ final class SquareToolbarButton: NSButton {
         }
     }
 
+    /// 选中态 (isOn == true) 时是否绘制常驻背景浅灰底。
+    /// 设为 false 时，选中仅靠图标/文字着色（如变蓝），不绘制背景灰色。
+    var showsBackgroundWhenOn: Bool = true {
+        didSet {
+            guard oldValue != showsBackgroundWhenOn else { return }
+            needsDisplay = true
+        }
+    }
+
     override var isHighlighted: Bool {
         didSet { needsDisplay = true }
     }
@@ -392,8 +576,8 @@ final class SquareToolbarButton: NSButton {
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
     override func draw(_ dirtyRect: NSRect) {
-        if isOn {
-            // 选中态用中性灰底（和访达、QSpace 的工具栏一致），不用强调色，避免抢视觉
+        if isOn && showsBackgroundWhenOn {
+            // 选中态用中性灰底（和系统访达的工具栏一致），不用强调色，避免抢视觉
             NSColor.labelColor.withAlphaComponent(isHovered ? 0.18 : 0.14).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 5, yRadius: 5).fill()
         } else if isHovered || isHighlighted {
@@ -531,6 +715,20 @@ enum Format {
         formatter.dateFormat = "yyyy/M/d"
         return formatter
     }()
+
+    private static let detailedDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.doesRelativeDateFormatting = true
+        formatter.dateStyle = .full
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    /// 详情栏完整日期展示（1:1 还原访达信息栏：今天/昨天+时间，或完整年月日+星期+时间）
+    static func detailedDate(_ date: Date) -> String {
+        return detailedDateFormatter.string(from: date)
+    }
 
     /// 今天的显示时间，往年的显示年份，其余显示「月-日 时:分」。
     /// 复用静态 DateFormatter 实例，避免列表滚动时每个单元格都重新分配 ICU 格式化器。

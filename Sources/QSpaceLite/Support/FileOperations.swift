@@ -262,4 +262,220 @@ enum FileOperations {
             return false
         }
     }
+
+    // MARK: - 复制副本（Duplicate）
+
+    /// 复制所选文件/文件夹生成“副本”（支持多选与递增编号）
+    @discardableResult
+    static func duplicate(urls: [URL]) -> [URL] {
+        var results: [URL] = []
+        let fm = FileManager.default
+        for url in urls {
+            let dir = url.deletingLastPathComponent()
+            let name = url.lastPathComponent
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let ext = url.pathExtension
+            let base = ext.isEmpty || isDir ? name : (name as NSString).deletingPathExtension
+
+            var candidateName = ext.isEmpty || isDir ? "\(base) 副本" : "\(base) 副本.\(ext)"
+            var dest = dir.appendingPathComponent(candidateName)
+            var counter = 2
+            while fm.fileExists(atPath: dest.path) {
+                candidateName = ext.isEmpty || isDir ? "\(base) 副本 \(counter)" : "\(base) 副本 \(counter).\(ext)"
+                dest = dir.appendingPathComponent(candidateName)
+                counter += 1
+            }
+
+            do {
+                try fm.copyItem(at: url, to: dest)
+                results.append(dest)
+            } catch {
+                NSLog("[Maple Duplicate] Failed to duplicate \(url.path): \(error)")
+            }
+        }
+        if !results.isEmpty {
+            playFileAddedSound()
+            NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+        }
+        return results
+    }
+
+    // MARK: - 压缩与解压缩（Compress & Decompress）
+
+    /// 判断指定文件是否是压缩包
+    static func isArchive(url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ["zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar"].contains(ext)
+    }
+
+    /// 压缩选中的文件/文件夹为 zip 压缩包
+    static func compress(urls: [URL], completion: @escaping ([URL]) -> Void) {
+        guard !urls.isEmpty else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var created: [URL] = []
+            let fm = FileManager.default
+            let dir = urls[0].deletingLastPathComponent()
+
+            if urls.count == 1 {
+                let src = urls[0]
+                let isDir = (try? src.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                let base = isDir ? src.lastPathComponent : src.deletingPathExtension().lastPathComponent
+                let zipName = "\(base).zip"
+                let dest = uniqueURL(for: zipName, in: dir)
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                p.arguments = ["-c", "-k", "--sequesterRsrc", "--keepParent", src.path, dest.path]
+                try? p.run()
+                p.waitUntilExit()
+                if p.terminationStatus == 0 && fm.fileExists(atPath: dest.path) {
+                    created.append(dest)
+                }
+            } else {
+                let dest = uniqueURL(for: "归档.zip", in: dir)
+                let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+                try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                defer { try? fm.removeItem(at: tempDir) }
+                for u in urls {
+                    let link = tempDir.appendingPathComponent(u.lastPathComponent)
+                    try? fm.copyItem(at: u, to: link)
+                }
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                p.arguments = ["-c", "-k", "--sequesterRsrc", tempDir.path, dest.path]
+                try? p.run()
+                p.waitUntilExit()
+                if p.terminationStatus == 0 && fm.fileExists(atPath: dest.path) {
+                    created.append(dest)
+                }
+            }
+
+            DispatchQueue.main.async {
+                if !created.isEmpty {
+                    playFileAddedSound()
+                    NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                }
+                completion(created)
+            }
+        }
+    }
+
+    /// 解压缩指定的归档文件到当前目录
+    static func decompress(urls: [URL], completion: @escaping () -> Void) {
+        guard !urls.isEmpty else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            for src in urls {
+                let dir = src.deletingLastPathComponent()
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                p.arguments = ["-x", "-k", src.path, dir.path]
+                try? p.run()
+                p.waitUntilExit()
+            }
+            DispatchQueue.main.async {
+                playFileAddedSound()
+                NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                completion()
+            }
+        }
+    }
+
+    // MARK: - 直接永久删除（Delete Immediately）
+
+    /// 直接永久删除文件/文件夹（不经过废纸篓，带确认弹窗）
+    static func deleteImmediately(urls: [URL], window: NSWindow?, completion: @escaping (Bool) -> Void) {
+        guard !urls.isEmpty else { return }
+        let alert = NSAlert()
+        let count = urls.count
+        if count == 1 {
+            let name = urls[0].lastPathComponent
+            alert.messageText = "确定要永久删除“\(name)”吗？"
+            alert.informativeText = "此项目将被立即抹掉。您无法撤销此操作。"
+        } else {
+            alert.messageText = "确定要永久删除这 \(count) 个项目吗？"
+            alert.informativeText = "这些项目将被立即抹掉。您无法撤销此操作。"
+        }
+        alert.alertStyle = .critical
+        let delBtn = alert.addButton(withTitle: "删除")
+        if #available(macOS 11.0, *) {
+            delBtn.hasDestructiveAction = true
+        }
+        alert.addButton(withTitle: "取消")
+
+        let performAction = {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fm = FileManager.default
+                var success = false
+                for url in urls {
+                    do {
+                        try fm.removeItem(at: url)
+                        success = true
+                    } catch {
+                        NSLog("[Maple Delete] Failed to remove \(url.path): \(error)")
+                    }
+                }
+                DispatchQueue.main.async {
+                    if success {
+                        playTrashSound()
+                        NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                    }
+                    completion(success)
+                }
+            }
+        }
+
+        if let window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn {
+                    performAction()
+                } else {
+                    completion(false)
+                }
+            }
+        } else {
+            if alert.runModal() == .alertFirstButtonReturn {
+                performAction()
+            } else {
+                completion(false)
+            }
+        }
+    }
+
+    // MARK: - 原生交互音效系统
+
+    /// 播放新建文件 / 文件夹音效
+    static func playFileAddedSound() {
+        playSound(named: "FileAdded", fallbackPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/finder/copy.aif")
+    }
+
+    /// 播放删除文件 / 移到废纸篓音效
+    static func playTrashSound() {
+        playSound(named: "FileRemoved", fallbackPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/finder/move to trash.aif")
+    }
+
+    /// 播放清倒废纸篓音效
+    static func playEmptyTrashSound() {
+        playSound(named: "EmptyTrash", fallbackPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/finder/empty trash.aif")
+    }
+
+    private static func playSound(named name: String, fallbackPath: String? = nil) {
+        // 1. 优先尝试从应用 Bundle 读取内置音效
+        if let url = Bundle.main.url(forResource: name, withExtension: "aif") {
+            if let sound = NSSound(contentsOf: url, byReference: true) {
+                sound.play()
+                return
+            }
+        }
+        // 2. 尝试从 Resources 目录直读（开发/调试阶段）
+        let localCandidate = URL(fileURLWithPath: "Resources/\(name).aif")
+        if FileManager.default.fileExists(atPath: localCandidate.path) {
+            if let sound = NSSound(contentsOf: localCandidate, byReference: true) {
+                sound.play()
+                return
+            }
+        }
+        // 3. 兜底回退到系统同名音效
+        if let fallbackPath, FileManager.default.fileExists(atPath: fallbackPath) {
+            NSSound(contentsOfFile: fallbackPath, byReference: true)?.play()
+        }
+    }
 }

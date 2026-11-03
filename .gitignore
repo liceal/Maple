@@ -38,4 +38,17 @@ xcuserdata/
 
 # Temporary & Legacy Backups
 .legacy-src/
+.workbuddy/
+
+# Secrets & Local Configurations
+.env
+.env.*
+*.pem
+*.p12
+*.cer
+*.key
+*.mobileprovision
+*.provisionprofile
+*.orig
+*.rej
 

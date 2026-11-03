@@ -54,6 +54,7 @@ final class SearchPanelController: NSObject {
     private let pathLabel = NSTextField(labelWithString: "")
     private let openDirectButton = NSButton()
     private let locateInPaneButton = NSButton()
+    private let sizeSlider = DisplaySizeSliderControl()
 
     private var hits: [FileSearchEngine.Hit] = []
     private var fileItems: [FileItem] = []
@@ -300,6 +301,24 @@ final class SearchPanelController: NSObject {
         locateInPaneButton.toolTip = "在主窗口当前窗格中打开并高亮定位该项"
         bottomBar.addSubview(locateInPaneButton)
 
+        sizeSlider.translatesAutoresizingMaskIntoConstraints = false
+        sizeSlider.onSizeChanged = { [weak self] mode, value in
+            guard let self else { return }
+            switch mode {
+            case .icons:
+                AppSettings.gridIconSize = CGFloat(value)
+                self.iconView.applyIconSize(CGFloat(value))
+            case .list:
+                AppSettings.listIconSize = CGFloat(value)
+                AppSettings.listRowHeight = max(20, CGFloat(value) + 6)
+                self.listView.applyListSize(iconSize: CGFloat(value))
+            case .columns:
+                AppSettings.browserColumnWidth = CGFloat(value)
+                self.columnView.applyColumnWidth(CGFloat(value))
+            }
+        }
+        bottomBar.addSubview(sizeSlider)
+
         NSLayoutConstraint.activate([
             topBar.topAnchor.constraint(equalTo: rootEffect.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: rootEffect.leadingAnchor),
@@ -395,8 +414,11 @@ final class SearchPanelController: NSObject {
             openDirectButton.trailingAnchor.constraint(equalTo: locateInPaneButton.leadingAnchor, constant: -8),
             openDirectButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
 
-            locateInPaneButton.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor, constant: -14),
-            locateInPaneButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor)
+            locateInPaneButton.trailingAnchor.constraint(equalTo: sizeSlider.leadingAnchor, constant: -12),
+            locateInPaneButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
+
+            sizeSlider.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor, constant: -14),
+            sizeSlider.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor)
         ])
 
         panel.contentView = rootEffect
@@ -419,9 +441,7 @@ final class SearchPanelController: NSObject {
         iconView.onOpen = { [weak self] item in self?.handleItemDoubleClick(item, inViewMode: .icons) }
         iconView.onSelectionChange = { [weak self] _ in self?.syncSelectedPathLabel() }
         iconView.keyHandler = { [weak self] event in self?.handleResultViewKey(event) ?? false }
-        iconView.menuProvider = { [weak self] in
-            self?.makeResultContextMenu(for: self?.iconView.selectedItems.first)
-        }
+        iconView.menuProvider = { [weak self] item in self?.makeResultContextMenu(for: item) }
         iconView.canSwipeBack = { [weak self] in !(self?.drilldownFolderStack.isEmpty ?? true) }
         iconView.canSwipeForward = { [weak self] in !(self?.drilldownForwardStack.isEmpty ?? true) }
         iconView.onSwipeBack = { [weak self] in self?.popDrilldownFolder() }
@@ -474,6 +494,18 @@ final class SearchPanelController: NSObject {
     }
 
     var isVisible: Bool { panel.isVisible }
+
+    /// 设置搜索范围（全局「此 Mac」还是「当前文件夹」）
+    func setScope(isCurrentFolder: Bool) {
+        scopeControl.setScope(isCurrentFolder: isCurrentFolder)
+        updatePlaceholder()
+        if isVisible {
+            let trimmed = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                executeSearchWithVisualFeedback(term: trimmed, explicit: true)
+            }
+        }
+    }
 
     @objc private func closeClicked() {
         close()
@@ -531,6 +563,7 @@ final class SearchPanelController: NSObject {
         listView.isHidden = (currentViewMode != .list)
         iconView.isHidden = (currentViewMode != .icons)
         columnView.isHidden = (currentViewMode != .columns)
+        sizeSlider.configure(for: currentViewMode)
         refreshActiveViewData(preserveSelection: true)
     }
 
@@ -548,8 +581,8 @@ final class SearchPanelController: NSObject {
                                             sort: sortField,
                                             ascending: sortAscending,
                                             group: .none)
-        listView.update(sections: sorted)
-        iconView.update(sections: sorted)
+        fileItems = sorted.first?.items ?? fileItems
+        refreshActiveViewData(preserveSelection: true)
     }
 
     private func refreshActiveViewData(preserveSelection: Bool) {
@@ -557,12 +590,13 @@ final class SearchPanelController: NSObject {
 
         let section = FileSection(title: "", rank: 0, items: fileItems)
 
-        // 树状列表模式：若是搜索结果（且未处在单文件夹钻取浏览中），自动还原为树状父子目录结构并展开！
-        if isDisplayingSearchResults && drilldownFolderStack.isEmpty {
-            let baseFolder = scopeControl.isCurrentFolder ? currentFolderProvider?() : nil
-            listView.updateWithSearchTree(items: fileItems, baseFolder: baseFolder)
-        } else {
-            listView.update(sections: [section])
+        // 树状列表模式：纯粹展示当前搜索命中的条目，不显示父级别，且全部初始保持折叠（不展开），用户点击三角可手动展开
+        if currentViewMode == .list {
+            if isDisplayingSearchResults && drilldownFolderStack.isEmpty {
+                listView.updateWithSearchResults(fileItems)
+            } else {
+                listView.update(sections: [section])
+            }
         }
 
         iconView.update(sections: [section])
@@ -785,7 +819,7 @@ final class SearchPanelController: NSObject {
             self.emptyStateLabel.stringValue = "输入文件名或关键字开始搜索（按 ↩ 立即搜索）"
             self.statusDot.layer?.backgroundColor = NSColor.secondaryLabelColor.cgColor
             self.statsLabel.textColor = .secondaryLabelColor
-            self.statsLabel.stringValue = "准备就绪 · 支持列表 / 图标 / 分栏三种查看方式"
+            self.statsLabel.stringValue = "准备就绪 · 支持列表 / 图标 / 分栏查看方式"
             self.refreshActiveViewData(preserveSelection: false)
             return
         }
@@ -849,6 +883,9 @@ final class SearchPanelController: NSObject {
 
         if flags == .command {
             switch chars {
+            case "q":
+                NSApp.terminate(nil)
+                return true
             case "1":
                 currentViewMode = .list
                 return true
@@ -866,9 +903,21 @@ final class SearchPanelController: NSObject {
                 openSettingsClicked()
                 return true
             default:
-                if event.keyCode == 36 || event.keyCode == 76 { // ⌘Return：在主窗格定位或直接打开
+                switch event.keyCode {
+                case 18:
+                    currentViewMode = .list
+                    return true
+                case 19:
+                    currentViewMode = .icons
+                    return true
+                case 20:
+                    currentViewMode = .columns
+                    return true
+                case 36, 76: // ⌘Return：在主窗格定位或直接打开
                     locateSelectedInMainPane()
                     return true
+                default:
+                    break
                 }
             }
         }
@@ -973,7 +1022,23 @@ final class SearchPanelController: NSObject {
         copyPath.representedObject = target.url
         menu.addItem(copyPath)
 
+        menu.addItem(.separator())
+
+        let trashItem = NSMenuItem(title: "移到废纸篓", action: #selector(ctxTrashItem(_:)), keyEquivalent: "")
+        trashItem.target = self
+        trashItem.representedObject = target.url
+        menu.addItem(trashItem)
+
         return menu
+    }
+
+    @objc private func ctxTrashItem(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        FileOperations.playTrashSound()
+        var resulting: NSURL?
+        try? FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
+        NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+        triggerExplicitSearch()
     }
 
     @objc private func ctxRevealInPane(_ sender: NSMenuItem) {
@@ -1149,6 +1214,11 @@ private final class SearchScopePillControl: NSView {
         isCurrentFolder.toggle()
     }
 
+    func setScope(isCurrentFolder: Bool) {
+        guard self.isCurrentFolder != isCurrentFolder else { return }
+        self.isCurrentFolder = isCurrentFolder
+    }
+
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         let firstEnd = 3 + Self.itemWidths[0]
@@ -1212,6 +1282,14 @@ final class SearchColumnBrowserView: NSView {
     private var dragStartColumnWidth: CGFloat = 0
     private var dragStartPreviewWidth: CGFloat = 230
 
+    func applyColumnWidth(_ width: CGFloat) {
+        let clamped = min(max(width, 160), 650)
+        hitsColumn.columnWidth = clamped
+        for col in subColumns { col.columnWidth = clamped }
+        preview.columnWidth = clamped
+        tileColumns()
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setup()
@@ -1226,7 +1304,7 @@ final class SearchColumnBrowserView: NSView {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.paneBackground
+        scroll.backgroundColor = .controlBackgroundColor
         scroll.documentView = board
         addSubview(scroll)
 
@@ -1495,7 +1573,7 @@ final class SearchColumnBrowserView: NSView {
 private final class SearchColumnBoard: NSView {
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
-        Theme.paneBackground.setFill()
+        NSColor.controlBackgroundColor.setFill()
         bounds.fill()
     }
 }
@@ -1533,7 +1611,7 @@ private final class SearchHitsListColumn: NSView, NSTableViewDataSource, NSTable
         table.selectionHighlightStyle = .regular
         table.allowsEmptySelection = true
         table.allowsMultipleSelection = true
-        table.backgroundColor = Theme.paneBackground
+        table.backgroundColor = .controlBackgroundColor
         table.dataSource = self
         table.delegate = self
         table.target = self
@@ -1554,20 +1632,21 @@ private final class SearchHitsListColumn: NSView, NSTableViewDataSource, NSTable
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.paneBackground
+        scroll.backgroundColor = .controlBackgroundColor
         scroll.scrollerStyle = .overlay
         addSubview(scroll)
 
+        let verticalInset: CGFloat = 5.0
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: verticalInset),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -verticalInset),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1)
         ])
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.paneBackground.setFill()
+        NSColor.controlBackgroundColor.setFill()
         bounds.fill()
         Theme.hairline.setFill()
         NSRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()

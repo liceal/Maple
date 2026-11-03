@@ -1,6 +1,6 @@
 import AppKit
 
-/// 布局选择器：仿 QSpace 的竖向图标条。
+/// 布局选择器：原生竖向图标条。
 /// 每行一个布局示意图，当前布局高亮并带勾选，点一下立刻切换。
 final class LayoutPickerController: NSObject {
 

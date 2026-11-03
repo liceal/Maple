@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 protocol PaneViewDelegate: AnyObject {
     func paneDidActivate(_ pane: PaneView)
@@ -17,6 +18,14 @@ final class PaneView: NSView {
     weak var delegate: PaneViewDelegate?
 
     private(set) var currentURL: URL
+
+    /// 当前操作的目标目录（列表/图标视图为 currentURL，分栏视图为当前选中/右键的列对应目录）。
+    var activeDirectoryURL: URL {
+        if viewMode == .columns {
+            return columnView.activeColumnURL
+        }
+        return currentURL
+    }
     private(set) var items: [FileItem] = []
     private(set) var sections: [FileSection] = []
 
@@ -44,16 +53,21 @@ final class PaneView: NSView {
     var isFocused: Bool = false {
         didSet {
             guard oldValue != isFocused else { return }
-            pathBar.isActive = isFocused
-            headerTint.fillColor = isFocused
-                ? NSColor.controlAccentColor.withAlphaComponent(0.17)
-                : .clear
-            focusRing.color = isFocused
-                ? NSColor.controlAccentColor.withAlphaComponent(0.85)
-                : .clear
-            iconView.isPaneActive = isFocused
-            needsDisplay = true
+            updateFocusVisuals()
         }
+    }
+
+    func updateFocusVisuals() {
+        pathBar.isActive = isFocused && AppSettings.highlightPaneAddressBar
+        headerTint.fillColor = (isFocused && AppSettings.highlightPaneAddressBar)
+            ? NSColor.controlAccentColor.withAlphaComponent(0.17)
+            : .clear
+        focusRing.color = (isFocused && AppSettings.showPaneBorder)
+            ? NSColor.controlAccentColor.withAlphaComponent(0.85)
+            : .clear
+        iconView.isPaneActive = isFocused
+        statusBar.isHidden = AppSettings.hideBottomStatusBar
+        needsDisplay = true
     }
 
     /// 后退 / 前进的历史：**以地址栏显示的地址为唯一依据**。
@@ -72,6 +86,27 @@ final class PaneView: NSView {
     private var viewModeBeforeTag: ViewMode?
     var isTagView: Bool { tagName != nil }
 
+    // MARK: - 文件操作撤销与重做栈
+    struct FileActionRecord {
+        enum ActionType {
+            case moveToTrash(mapping: [(original: URL, trash: URL)])
+            case rename(from: URL, to: URL)
+        }
+        let type: ActionType
+    }
+    private var undoStack: [FileActionRecord] = []
+    private var redoStack: [FileActionRecord] = []
+
+    // MARK: - 右键上下文目标与剪切标志
+    private var contextTargetItems: [FileItem] = []
+    private static let cutPasteboardType = NSPasteboard.PasteboardType("com.maple.cut-flag")
+    private var effectiveContextItems: [FileItem] {
+        if !contextTargetItems.isEmpty {
+            return contextTargetItems
+        }
+        return currentSelection()
+    }
+
     // MARK: - 视图
 
     private let header = Theme.backgroundView(Theme.paneBackground)
@@ -85,10 +120,25 @@ final class PaneView: NSView {
     private let forwardButton = NSButton()
     private let statusLeft = NSTextField(labelWithString: "")
     private let statusRight = NSTextField(labelWithString: "")
+    private let sizeSlider = DisplaySizeSliderControl()
+    private let previewButton: SquareToolbarButton = {
+        let btn = SquareToolbarButton(size: 20)
+        btn.showsBackgroundWhenOn = false
+        return btn
+    }()
     private let emptyLabel = NSTextField(labelWithString: "文件夹为空")
     private let listView = FileListView()
     private let iconView = FileIconView()
     private let columnView = ColumnBrowserView()
+
+    // MARK: - 预览窗格
+    private let listAndIconContainer = NSView()
+    private let previewPane = FilePreviewPane()
+    private let previewSplitter = SplitterView()
+    private var previewWidthConstraint: NSLayoutConstraint?
+    private var previewWidthAtDragStart: CGFloat = 260
+    private var listAndIconTrailingToContent: NSLayoutConstraint?
+    private var listAndIconTrailingToSplitter: NSLayoutConstraint?
 
     // MARK: - 生命周期
 
@@ -226,30 +276,89 @@ final class PaneView: NSView {
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
 
+        // 1. 列表与图标的容器
+        listAndIconContainer.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(listAndIconContainer)
+
         listView.translatesAutoresizingMaskIntoConstraints = false
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        columnView.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(listView)
-        content.addSubview(iconView)
-        content.addSubview(columnView)
+        listAndIconContainer.addSubview(listView)
+        listAndIconContainer.addSubview(iconView)
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.textColor = .tertiaryLabelColor
         emptyLabel.isHidden = true
-        content.addSubview(emptyLabel)
+        listAndIconContainer.addSubview(emptyLabel)
 
-        for view in [listView, iconView, columnView] {
+        for view in [listView, iconView] {
             NSLayoutConstraint.activate([
-                view.topAnchor.constraint(equalTo: content.topAnchor),
-                view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-                view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: content.trailingAnchor)
+                view.topAnchor.constraint(equalTo: listAndIconContainer.topAnchor),
+                view.bottomAnchor.constraint(equalTo: listAndIconContainer.bottomAnchor),
+                view.leadingAnchor.constraint(equalTo: listAndIconContainer.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: listAndIconContainer.trailingAnchor)
             ])
         }
         NSLayoutConstraint.activate([
-            emptyLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor)
+            emptyLabel.centerXAnchor.constraint(equalTo: listAndIconContainer.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: listAndIconContainer.centerYAnchor)
+        ])
+
+        // 2. 分栏视图（独占整块窗格，自带内部多列与预览列）
+        columnView.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(columnView)
+
+        NSLayoutConstraint.activate([
+            columnView.topAnchor.constraint(equalTo: content.topAnchor),
+            columnView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            columnView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            columnView.trailingAnchor.constraint(equalTo: content.trailingAnchor)
+        ])
+
+        // 3. 列表/图标模式下的右侧预览窗格与可拖动分割线
+        previewSplitter.axis = .vertical
+        previewSplitter.translatesAutoresizingMaskIntoConstraints = false
+        previewSplitter.onDragBegan = { [weak self] in
+            guard let self, let constraint = self.previewWidthConstraint else { return }
+            self.previewWidthAtDragStart = constraint.constant
+        }
+        previewSplitter.onDrag = { [weak self] delta in
+            guard let self, let constraint = self.previewWidthConstraint else { return }
+            let newWidth = min(max(self.previewWidthAtDragStart - delta, 180), 600)
+            constraint.constant = newWidth
+        }
+        previewSplitter.onDragEnd = { [weak self] in
+            guard let constraint = self?.previewWidthConstraint else { return }
+            AppSettings.previewPaneWidth = constraint.constant
+        }
+        content.addSubview(previewSplitter)
+
+        previewPane.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(previewPane)
+
+        let widthConstraint = previewPane.widthAnchor.constraint(equalToConstant: AppSettings.previewPaneWidth)
+        previewWidthConstraint = widthConstraint
+
+        let toContent = listAndIconContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor)
+        let toSplitter = listAndIconContainer.trailingAnchor.constraint(equalTo: previewSplitter.leadingAnchor)
+        listAndIconTrailingToContent = toContent
+        listAndIconTrailingToSplitter = toSplitter
+
+        NSLayoutConstraint.activate([
+            listAndIconContainer.topAnchor.constraint(equalTo: content.topAnchor),
+            listAndIconContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            listAndIconContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            toContent,
+
+            previewSplitter.topAnchor.constraint(equalTo: content.topAnchor),
+            previewSplitter.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            previewSplitter.trailingAnchor.constraint(equalTo: previewPane.leadingAnchor),
+            previewSplitter.widthAnchor.constraint(equalToConstant: 6),
+
+            previewPane.topAnchor.constraint(equalTo: content.topAnchor),
+            previewPane.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            previewPane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            widthConstraint
         ])
 
         addSubview(statusBar)
@@ -265,6 +374,32 @@ final class PaneView: NSView {
         statusRight.textColor = .tertiaryLabelColor
         statusRight.alignment = .right
         statusBar.addSubview(statusRight)
+
+        sizeSlider.translatesAutoresizingMaskIntoConstraints = false
+        sizeSlider.onSizeChanged = { [weak self] mode, value in
+            guard let self else { return }
+            switch mode {
+            case .icons:
+                AppSettings.gridIconSize = CGFloat(value)
+                self.iconView.applyIconSize(CGFloat(value))
+            case .list:
+                AppSettings.listIconSize = CGFloat(value)
+                AppSettings.listRowHeight = max(20, CGFloat(value) + 6)
+                self.listView.applyListSize(iconSize: CGFloat(value))
+            case .columns:
+                AppSettings.browserColumnWidth = CGFloat(value)
+                self.columnView.applyColumnWidth(CGFloat(value))
+            }
+        }
+        statusBar.addSubview(sizeSlider)
+
+        // 4. 预览模式切换按钮（右下角，内置图标）
+        previewButton.translatesAutoresizingMaskIntoConstraints = false
+        previewButton.image = Theme.previewPaneIcon
+        previewButton.toolTip = "显示/隐藏右侧预览窗格"
+        previewButton.target = self
+        previewButton.action = #selector(previewButtonClicked)
+        statusBar.addSubview(previewButton)
 
         let topLine = Theme.hairlineView()
         statusBar.addSubview(topLine)
@@ -291,7 +426,13 @@ final class PaneView: NSView {
             statusLeft.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 8),
             statusLeft.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor, constant: 0.5),
 
-            statusRight.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -8),
+            previewButton.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -8),
+            previewButton.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+
+            sizeSlider.trailingAnchor.constraint(equalTo: previewButton.leadingAnchor, constant: -6),
+            sizeSlider.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+
+            statusRight.trailingAnchor.constraint(equalTo: sizeSlider.leadingAnchor, constant: -12),
             statusRight.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor, constant: 0.5),
             statusRight.leadingAnchor.constraint(greaterThanOrEqualTo: statusLeft.trailingAnchor, constant: 8)
         ])
@@ -330,7 +471,7 @@ final class PaneView: NSView {
         iconView.onSelectionChange = { [weak self] _ in self?.selectionChanged() }
         iconView.onActivate = { [weak self] in self?.activate() }
         iconView.keyHandler = { [weak self] event in self?.handleKey(event) ?? false }
-        iconView.menuProvider = { [weak self] in self?.makeContextMenu(clickedItem: nil) }
+        iconView.menuProvider = { [weak self] item in self?.makeContextMenu(clickedItem: item) }
         iconView.canSwipeBack = { [weak self] in self?.canSwipeBackInIconView ?? false }
         iconView.canSwipeForward = { [weak self] in self?.canGoForward ?? false }
         iconView.onSwipeBack = { [weak self] in self?.swipeBackInIconView() }
@@ -368,6 +509,14 @@ final class PaneView: NSView {
         NotificationCenter.default.addObserver(forName: .showHiddenFilesDidChange, object: nil, queue: .main) { [weak self] _ in
             self?.reload()
         }
+
+        NotificationCenter.default.addObserver(forName: .paneAppearanceDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.updateFocusVisuals()
+        }
+
+        NotificationCenter.default.addObserver(forName: .bottomStatusBarDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.updateFocusVisuals()
+        }
     }
 
     // MARK: - 焦点
@@ -391,6 +540,9 @@ final class PaneView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        header.needsDisplay = true
+        statusBar.needsDisplay = true
+        pathBar.needsDisplay = true
         needsDisplay = true
     }
 
@@ -419,9 +571,43 @@ final class PaneView: NSView {
         // 目录内容可能变了（例如刚新建文件夹），重新判断地址栏箭头是否置灰
         pathBar.invalidateFolderCache()
         refreshPathBar()
-        emptyLabel.isHidden = !items.isEmpty
+        if items.isEmpty {
+            if FileItem.isTrash(url: currentURL) && !FileItem.checkTrashPermission() {
+                emptyLabel.stringValue = "未能读取废纸篓内容\n请在「系统设置」>「隐私与安全性」授予 Maple 权限".localized
+                promptTrashPermissionIfNeeded()
+            } else {
+                emptyLabel.stringValue = "文件夹为空".localized
+            }
+            emptyLabel.isHidden = false
+        } else {
+            emptyLabel.isHidden = true
+        }
         updateNavigationButtons()
         updateStatus()
+        updatePreviewContent()
+    }
+
+    private static var hasPromptedTrashAlert = false
+
+    private func promptTrashPermissionIfNeeded() {
+        guard !Self.hasPromptedTrashAlert else { return }
+        Self.hasPromptedTrashAlert = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, FileItem.isTrash(url: self.currentURL), self.items.isEmpty else { return }
+            let alert = NSAlert()
+            alert.messageText = "需要废纸篓访问权限".localized
+            alert.informativeText = "由于 macOS 隐私安全保护机制，浏览“废纸篓”需要授予 Maple「完全磁盘访问权限」或允许控制「访达」。\n\n点击「打开系统设置」前往开启权限后即可正常浏览。".localized
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "打开系统设置".localized)
+            alert.addButton(withTitle: "好".localized)
+
+            if alert.runModal() == .alertFirstButtonReturn {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
     }
 
     /// 顶栏面包屑跟随当前视图的「显示位置」：分栏模式下是选中的文件夹/文件，
@@ -529,6 +715,9 @@ final class PaneView: NSView {
 
     private func handleDroppedFiles(_ urls: [URL], destinationDirectory: URL, isCopy: Bool) {
         let created = FileOperations.transfer(urls: urls, to: destinationDirectory, isCopy: isCopy)
+        if !created.isEmpty {
+            FileOperations.playFileAddedSound()
+        }
         NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
         reload()
         if !created.isEmpty {
@@ -540,7 +729,9 @@ final class PaneView: NSView {
         listView.isHidden = viewMode != .list
         iconView.isHidden = viewMode != .icons
         columnView.isHidden = viewMode != .columns
+        listAndIconContainer.isHidden = viewMode == .columns
         pathBar.isColumnMode = viewMode == .columns
+        sizeSlider.configure(for: viewMode)
         switch viewMode {
         case .list: listView.focus()
         case .icons: iconView.focus()
@@ -551,6 +742,7 @@ final class PaneView: NSView {
         refreshPathBar()
         updateNavigationButtons()
         updateStatus()
+        syncPreviewPaneState()
     }
 
     /// 导航按钮的依据：分栏模式下取「当前显示位置」。
@@ -604,8 +796,61 @@ final class PaneView: NSView {
     }
 
     private func selectionChanged() {
+        refreshPathBar()
         updateStatus()
         activate()
+        updatePreviewContent()
+    }
+
+    // MARK: - 预览模式控制
+
+    @objc private func previewButtonClicked() {
+        let current = AppSettings.isPreviewPaneVisible(for: viewMode)
+        let newVisible = !current
+        AppSettings.setPreviewPaneVisible(newVisible, for: viewMode)
+        syncPreviewPaneState()
+    }
+
+    private func syncPreviewPaneState() {
+        let isVisible = AppSettings.isPreviewPaneVisible(for: viewMode)
+        previewButton.isOn = isVisible
+        previewButton.contentTintColor = isVisible ? .controlAccentColor : .secondaryLabelColor
+
+        if viewMode == .columns {
+            previewPane.isHidden = true
+            previewSplitter.isHidden = true
+            listAndIconTrailingToSplitter?.isActive = false
+            listAndIconTrailingToContent?.isActive = true
+            previewWidthConstraint?.isActive = false
+            columnView.isPreviewEnabled = isVisible
+        } else {
+            if isVisible {
+                previewPane.isHidden = false
+                previewSplitter.isHidden = false
+                listAndIconTrailingToContent?.isActive = false
+                listAndIconTrailingToSplitter?.isActive = true
+                previewWidthConstraint?.isActive = true
+                updatePreviewContent()
+            } else {
+                previewPane.isHidden = true
+                previewSplitter.isHidden = true
+                listAndIconTrailingToSplitter?.isActive = false
+                listAndIconTrailingToContent?.isActive = true
+                previewWidthConstraint?.isActive = false
+            }
+        }
+    }
+
+    private func updatePreviewContent() {
+        guard !previewPane.isHidden, viewMode != .columns else { return }
+        let selection = currentSelection()
+        if selection.count == 1 {
+            previewPane.configure(with: selection[0])
+        } else if selection.count > 1 {
+            previewPane.configure(with: selection)
+        } else {
+            previewPane.configureEmpty(folder: currentURL, itemsCount: items.count)
+        }
     }
 
     // MARK: - 打开
@@ -837,13 +1082,17 @@ final class PaneView: NSView {
         pathBar.beginEditingPath()
     }
 
-    /// 路径编辑结束后把键盘焦点交还文件列表，避免快捷键失效。
-    private func restoreFocusAfterPathEditing() {
+    /// 恢复文件列表的键盘焦点，避免快捷键失效。
+    func focus() {
         switch viewMode {
         case .list: listView.focus()
         case .icons: iconView.focus()
         case .columns: columnView.focus()
         }
+    }
+
+    private func restoreFocusAfterPathEditing() {
+        focus()
     }
 
     // MARK: - 排序 / 分组 / 显示选项（由顶部「更多」菜单调用）
@@ -907,8 +1156,24 @@ final class PaneView: NSView {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let chars = event.charactersIgnoringModifiers ?? ""
 
+        if (flags.contains(.command) || flags.contains(.control)) && chars == "z" {
+            if flags.contains(.shift) {
+                redoAction()
+            } else {
+                undoAction()
+            }
+            return true
+        }
+
+        if (flags == .command || flags == [.command, .shift]) && chars == "f" {
+            return false
+        }
+
         if flags == .command {
             switch chars {
+            case "q":
+                NSApp.terminate(nil)
+                return true
             case "a":
                 selectAll()
                 return true
@@ -966,6 +1231,15 @@ final class PaneView: NSView {
         case .list: listView.selectAll()
         case .icons: iconView.selectAll()
         case .columns: columnView.selectAll()
+        }
+        updateStatus()
+    }
+
+    func clearSelection() {
+        switch viewMode {
+        case .list: listView.deselectAll()
+        case .icons: iconView.deselectAll()
+        case .columns: columnView.clearSelection()
         }
         updateStatus()
     }
@@ -1088,17 +1362,19 @@ final class PaneView: NSView {
 
     @objc func createFolder() {
         guard tagName == nil else { NSSound.beep(); return }
+        let dir = activeDirectoryURL
         let base = "未命名文件夹"
         var candidate = base
         var index = 2
         let fileManager = FileManager.default
-        while fileManager.fileExists(atPath: currentURL.appendingPathComponent(candidate).path) {
+        while fileManager.fileExists(atPath: dir.appendingPathComponent(candidate).path) {
             candidate = "\(base) \(index)"
             index += 1
         }
-        let target = currentURL.appendingPathComponent(candidate)
+        let target = dir.appendingPathComponent(candidate)
         do {
             try fileManager.createDirectory(at: target, withIntermediateDirectories: false)
+            FileOperations.playFileAddedSound()
             reload()
             select(urls: [target])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
@@ -1114,6 +1390,7 @@ final class PaneView: NSView {
         let target = uniqueDestination(for: "未命名文件.txt")
         do {
             try Data().write(to: target)
+            FileOperations.playFileAddedSound()
             reload()
             select(urls: [target])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
@@ -1125,6 +1402,8 @@ final class PaneView: NSView {
     }
 
     private func handleFileRenamed(from oldURL: URL, to newURL: URL) {
+        undoStack.append(FileActionRecord(type: .rename(from: oldURL, to: newURL)))
+        redoStack.removeAll()
         reload()
         select(urls: [newURL])
         selectionChanged()
@@ -1142,25 +1421,195 @@ final class PaneView: NSView {
     }
 
     @objc func trashSelected() {
-        let urls = currentSelection().map { $0.url }
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
         guard !urls.isEmpty else { return }
-        NSWorkspace.shared.recycle(urls) { _, error in
+        FileOperations.playTrashSound()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            var trashedMapping: [(original: URL, trash: URL)] = []
+            var firstError: Error?
+
+            for url in urls {
+                var resultingURL: NSURL?
+                do {
+                    try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+                    if let inTrash = resultingURL as URL? {
+                        trashedMapping.append((original: url, trash: inTrash))
+                    }
+                } catch {
+                    if firstError == nil { firstError = error }
+                }
+            }
+
             DispatchQueue.main.async {
-                if let error {
-                    self.presentError(error, title: "无法移到废纸篓")
+                if !trashedMapping.isEmpty {
+                    self.undoStack.append(FileActionRecord(type: .moveToTrash(mapping: trashedMapping)))
+                    self.redoStack.removeAll()
+                }
+                if let firstError, trashedMapping.isEmpty {
+                    self.presentError(firstError, title: "无法移到废纸篓")
                 } else {
+                    self.contextTargetItems.removeAll()
+                    if self.viewMode != .columns {
+                        self.clearSelection()
+                    }
                     self.reload()
+                    self.refreshPathBar()
+                    self.selectionChanged()
+                    self.focus()
+                    NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
                 }
             }
         }
     }
 
-    @objc func copySelection() {
-        let urls = currentSelection().map { $0.url }
+    // MARK: - 撤销与重做
+
+    @objc func undo(_ sender: Any?) {
+        undoAction()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        redoAction()
+    }
+
+    @objc func undoAction() {
+        guard let record = undoStack.popLast() else {
+            NSSound.beep()
+            return
+        }
+
+        switch record.type {
+        case .moveToTrash(let mapping):
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                var restoredURLs: [URL] = []
+                var redoMapping: [(original: URL, trash: URL)] = []
+
+                for (original, inTrash) in mapping {
+                    guard FileManager.default.fileExists(atPath: inTrash.path) else { continue }
+                    let parent = original.deletingLastPathComponent()
+                    guard FileManager.default.fileExists(atPath: parent.path) else { continue }
+
+                    var dest = original
+                    if FileManager.default.fileExists(atPath: dest.path) {
+                        dest = self.uniqueDestination(for: original.lastPathComponent)
+                    }
+
+                    do {
+                        try FileManager.default.moveItem(at: inTrash, to: dest)
+                        restoredURLs.append(dest)
+                        redoMapping.append((original: dest, trash: inTrash))
+                    } catch {
+                        print("Failed to restore \(inTrash) to \(dest): \(error)")
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    if !restoredURLs.isEmpty {
+                        FileOperations.playFileAddedSound()
+                        self.redoStack.append(FileActionRecord(type: .moveToTrash(mapping: redoMapping)))
+                        self.reload()
+                        self.select(urls: Set(restoredURLs))
+                        self.refreshPathBar()
+                        self.selectionChanged()
+                        NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                    } else {
+                        NSSound.beep()
+                    }
+                }
+            }
+
+        case .rename(let fromURL, let toURL):
+            if FileManager.default.fileExists(atPath: toURL.path) && !FileManager.default.fileExists(atPath: fromURL.path) {
+                do {
+                    try FileManager.default.moveItem(at: toURL, to: fromURL)
+                    redoStack.append(FileActionRecord(type: .rename(from: toURL, to: fromURL)))
+                    reload()
+                    select(urls: Set([fromURL]))
+                    refreshPathBar()
+                    selectionChanged()
+                    NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                } catch {
+                    NSSound.beep()
+                }
+            }
+        }
+    }
+
+    @objc func redoAction() {
+        guard let record = redoStack.popLast() else {
+            NSSound.beep()
+            return
+        }
+
+        switch record.type {
+        case .moveToTrash(let mapping):
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                var trashedMapping: [(original: URL, trash: URL)] = []
+
+                for (urlToTrash, _) in mapping {
+                    guard FileManager.default.fileExists(atPath: urlToTrash.path) else { continue }
+                    var resultingURL: NSURL?
+                    do {
+                        try FileManager.default.trashItem(at: urlToTrash, resultingItemURL: &resultingURL)
+                        if let inTrash = resultingURL as URL? {
+                            trashedMapping.append((original: urlToTrash, trash: inTrash))
+                        }
+                    } catch { }
+                }
+
+                DispatchQueue.main.async {
+                    if !trashedMapping.isEmpty {
+                        FileOperations.playTrashSound()
+                        self.undoStack.append(FileActionRecord(type: .moveToTrash(mapping: trashedMapping)))
+                        self.clearSelection()
+                        self.reload()
+                        self.refreshPathBar()
+                        self.selectionChanged()
+                        NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                    }
+                }
+            }
+
+        case .rename(let fromURL, let toURL):
+            if FileManager.default.fileExists(atPath: fromURL.path) && !FileManager.default.fileExists(atPath: toURL.path) {
+                do {
+                    try FileManager.default.moveItem(at: fromURL, to: toURL)
+                    undoStack.append(FileActionRecord(type: .rename(from: fromURL, to: toURL)))
+                    reload()
+                    select(urls: Set([toURL]))
+                    refreshPathBar()
+                    selectionChanged()
+                    NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+                } catch {
+                    NSSound.beep()
+                }
+            }
+        }
+    }
+
+    @objc func cutSelection() {
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
         guard !urls.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects(urls as [NSURL])
+        pasteboard.setString("cut", forType: Self.cutPasteboardType)
+    }
+
+    @objc func copySelection() {
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
+        guard !urls.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects(urls as [NSURL])
+        pasteboard.setString("copy", forType: Self.cutPasteboardType)
     }
 
     @objc func paste() {
@@ -1169,23 +1618,37 @@ final class PaneView: NSView {
         guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
               !urls.isEmpty else { return }
 
+        let isCut = NSPasteboard.general.string(forType: Self.cutPasteboardType) == "cut"
+
         var firstCreated: URL?
+        let targetDir = activeDirectoryURL
         for source in urls {
-            let destination = uniqueDestination(for: source.lastPathComponent)
+            let destination = uniqueDestination(for: source.lastPathComponent, in: targetDir)
             do {
-                try FileManager.default.copyItem(at: source, to: destination)
+                if isCut {
+                    try FileManager.default.moveItem(at: source, to: destination)
+                } else {
+                    try FileManager.default.copyItem(at: source, to: destination)
+                }
                 if firstCreated == nil { firstCreated = destination }
             } catch {
                 presentError(error, title: "粘贴失败")
                 return
             }
         }
+        if isCut {
+            NSPasteboard.general.setString("", forType: Self.cutPasteboardType)
+        }
         reload()
-        if let firstCreated { select(urls: [firstCreated]) }
+        if let firstCreated {
+            FileOperations.playFileAddedSound()
+            select(urls: [firstCreated])
+        }
     }
 
-    private func uniqueDestination(for name: String) -> URL {
-        var candidate = currentURL.appendingPathComponent(name)
+    private func uniqueDestination(for name: String, in directory: URL? = nil) -> URL {
+        let dir = directory ?? activeDirectoryURL
+        var candidate = dir.appendingPathComponent(name)
         guard FileManager.default.fileExists(atPath: candidate.path) else { return candidate }
 
         let nsName = name as NSString
@@ -1194,20 +1657,21 @@ final class PaneView: NSView {
         var index = 2
         while true {
             let fileName = ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)"
-            candidate = currentURL.appendingPathComponent(fileName)
+            candidate = dir.appendingPathComponent(fileName)
             if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
             index += 1
         }
     }
 
     @objc func copyPath() {
-        let urls = currentSelection().isEmpty ? [currentURL] : currentSelection().map { $0.url }
+        let targets = effectiveContextItems
+        let urls = targets.isEmpty ? [activeDirectoryURL] : targets.map { $0.url }
         copyPathsToPasteboard(urls)
     }
 
-    /// 地址栏菜单始终拷贝当前窗格目录，不受文件列表选中项影响。
+    /// 地址栏菜单始终拷贝当前活动目录，不受文件列表选中项影响。
     @objc private func copyPanePath() {
-        copyPathsToPasteboard([currentURL])
+        copyPathsToPasteboard([activeDirectoryURL])
     }
 
     private func copyPathsToPasteboard(_ urls: [URL]) {
@@ -1217,24 +1681,87 @@ final class PaneView: NSView {
         pasteboard.setString(text, forType: .string)
     }
 
+    /// 复制副本（Duplicate）
+    @objc func contextDuplicate() {
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
+        guard !urls.isEmpty else { return }
+        let created = FileOperations.duplicate(urls: urls)
+        if !created.isEmpty {
+            reload()
+            select(urls: Set(created))
+        }
+    }
+
+    /// 压缩选中的文件/文件夹
+    @objc func contextCompress() {
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
+        guard !urls.isEmpty else { return }
+        FileOperations.compress(urls: urls) { [weak self] created in
+            self?.reload()
+            if let first = created.first {
+                self?.select(urls: Set([first]))
+            }
+        }
+    }
+
+    /// 解压缩归档文件
+    @objc func contextDecompress() {
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
+        guard !urls.isEmpty else { return }
+        FileOperations.decompress(urls: urls) { [weak self] in
+            self?.reload()
+        }
+    }
+
+    /// 直接永久删除（不进废纸篓）
+    @objc func deleteImmediately() {
+        let targets = effectiveContextItems
+        let urls = targets.map { $0.url }
+        guard !urls.isEmpty else { return }
+        FileOperations.deleteImmediately(urls: urls, window: window) { [weak self] success in
+            if success {
+                guard let self else { return }
+                self.contextTargetItems.removeAll()
+                if self.viewMode != .columns {
+                    self.clearSelection()
+                }
+                self.reload()
+                self.refreshPathBar()
+                self.selectionChanged()
+                self.focus()
+                NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+            }
+        }
+    }
+
     @objc func revealInFinder() {
-        let urls = currentSelection().isEmpty ? [currentURL] : currentSelection().map { $0.url }
+        let targets = effectiveContextItems
+        let urls = targets.isEmpty ? [activeDirectoryURL] : targets.map { $0.url }
         NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
     @objc private func revealPaneInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([currentURL])
+        NSWorkspace.shared.activateFileViewerSelecting([activeDirectoryURL])
     }
 
     @objc func openInTerminal() {
+        let targetURL: URL
+        if let target = effectiveContextItems.first {
+            targetURL = target.isDirectory ? target.url : target.url.deletingLastPathComponent()
+        } else {
+            targetURL = activeDirectoryURL
+        }
         let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
         let configuration = NSWorkspace.OpenConfiguration()
-        NSWorkspace.shared.open([currentURL], withApplicationAt: terminal, configuration: configuration)
+        NSWorkspace.shared.open([targetURL], withApplicationAt: terminal, configuration: configuration)
     }
 
     @objc func showInfo() {
-        let selection = currentSelection()
-        let urls = selection.isEmpty ? [navigationBaseURL] : selection.map { $0.url }
+        let targets = effectiveContextItems
+        let urls = targets.isEmpty ? [navigationBaseURL] : targets.map { $0.url }
         presentInfo(for: urls)
     }
 
@@ -1261,11 +1788,11 @@ final class PaneView: NSView {
         var sizeVal: Int64?
         if !isDirectory {
             if let size = values?.fileSize { sizeVal = Int64(size) }
-        } else if let cached = FilePreviewColumn.bundleSizeCache.object(forKey: url as NSURL) {
-            sizeVal = cached.int64Value
+        } else if let cached = BundleSizeCache.shared.size(for: url) {
+            sizeVal = cached
         } else if isPackage || isDirectory {
-            sizeVal = FilePreviewColumn.calculateDirectorySize(at: url)
-            FilePreviewColumn.bundleSizeCache.setObject(NSNumber(value: sizeVal ?? 0), forKey: url as NSURL)
+            sizeVal = BundleSizeCache.calculateDirectorySize(at: url)
+            BundleSizeCache.shared.set(size: sizeVal ?? 0, for: url)
         }
         if let sizeVal {
             lines.append("大小：\(Format.bytes(sizeVal))")
@@ -1280,10 +1807,20 @@ final class PaneView: NSView {
             let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) ?? "?"
             lines.append("链接目标：\(target)")
         }
+        if !isDirectory, let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
+            let appName = FileManager.default.displayName(atPath: appURL.path)
+            lines.append("打开方式：\(appName)")
+        }
 
         let alert = NSAlert()
         alert.messageText = "简介"
         alert.informativeText = lines.joined(separator: "\n")
+
+        // 设置为目标文件/目录/应用的真实图标（避免默认显示为 Maple 自身图标）
+        let targetIcon = NSWorkspace.shared.icon(forFile: url.path)
+        targetIcon.size = NSSize(width: 64, height: 64)
+        alert.icon = targetIcon
+
         alert.addButton(withTitle: "好")
         alert.beginSheetModal(for: window)
     }
@@ -1314,18 +1851,84 @@ final class PaneView: NSView {
     private func makeContextMenu(clickedItem: FileItem?) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let hasSelection = !currentSelection().isEmpty
+
+        let selection = currentSelection()
+        let targetItems: [FileItem]
+        if let clickedItem {
+            if selection.contains(where: { $0.url == clickedItem.url }) {
+                targetItems = selection
+            } else {
+                targetItems = [clickedItem]
+            }
+        } else {
+            targetItems = []
+        }
+        self.contextTargetItems = targetItems
+        let hasSelection = !targetItems.isEmpty
 
         if hasSelection {
+            // 1. 打开 / 在新窗格中打开
             add(menu, "打开", #selector(contextOpen))
             add(menu, "在新窗格中打开", #selector(contextOpenInOtherPane))
-            menu.addItem(.separator())
-            add(menu, "显示简介", #selector(showInfo))
-            menu.addItem(.separator())
-            add(menu, "拷贝", #selector(copySelection))
-            add(menu, "拷贝路径", #selector(copyPath))
+
+            // 打开方式（仅对单选有效）
+            if targetItems.count == 1, let openWithSub = makeOpenWithSubmenu(for: targetItems[0]) {
+                let openWithItem = NSMenuItem(title: "打开方式", action: nil, keyEquivalent: "")
+                openWithItem.submenu = openWithSub
+                menu.addItem(openWithItem)
+            }
 
             menu.addItem(.separator())
+
+            // 2. 快速查看 & 显示简介
+            let qlTitle = targetItems.count == 1 ? "快速查看“\(targetItems[0].name)”" : "快速查看 \(targetItems.count) 项"
+            let qlItem = add(menu, qlTitle, #selector(contextQuickLook))
+            qlItem.keyEquivalent = " "
+
+            let infoItem = add(menu, "显示简介", #selector(showInfo))
+            infoItem.keyEquivalent = "i"
+            infoItem.keyEquivalentModifierMask = [.command]
+
+            menu.addItem(.separator())
+
+            // 3. 剪切、拷贝、拷贝路径、复制
+            let cutItem = add(menu, targetItems.count == 1 ? "剪切“\(targetItems[0].name)”" : "剪切 \(targetItems.count) 项", #selector(cutSelection))
+            cutItem.keyEquivalent = "x"
+            cutItem.keyEquivalentModifierMask = [.command]
+
+            let copyItem = add(menu, targetItems.count == 1 ? "拷贝“\(targetItems[0].name)”" : "拷贝 \(targetItems.count) 项", #selector(copySelection))
+            copyItem.keyEquivalent = "c"
+            copyItem.keyEquivalentModifierMask = [.command]
+
+            let copyPathItem = add(menu, "拷贝路径", #selector(copyPath))
+            copyPathItem.keyEquivalent = "c"
+            copyPathItem.keyEquivalentModifierMask = [.command, .option]
+
+            let dupItem = add(menu, "复制", #selector(contextDuplicate))
+            dupItem.keyEquivalent = "d"
+            dupItem.keyEquivalentModifierMask = [.command]
+
+            menu.addItem(.separator())
+
+            // 4. 重命名
+            if targetItems.count == 1 {
+                let renameItem = add(menu, "重命名", #selector(renameSelected))
+                renameItem.keyEquivalent = "\r"
+            }
+
+            // 5. 压缩 / 解压缩
+            let allArchives = targetItems.allSatisfy { FileOperations.isArchive(url: $0.url) }
+            if allArchives {
+                let title = targetItems.count == 1 ? "解压缩“\(targetItems[0].name)”" : "解压缩 \(targetItems.count) 个归档"
+                add(menu, title, #selector(contextDecompress))
+            } else {
+                let title = targetItems.count == 1 ? "压缩“\(targetItems[0].name)”" : "压缩 \(targetItems.count) 个项目"
+                add(menu, title, #selector(contextCompress))
+            }
+
+            menu.addItem(.separator())
+
+            // 6. 标记
             let tagItem = NSMenuItem(title: "标记", action: nil, keyEquivalent: "")
             let tagSubmenu = NSMenu(title: "标记")
             tagSubmenu.autoenablesItems = false
@@ -1338,19 +1941,38 @@ final class PaneView: NSView {
             }
             tagItem.submenu = tagSubmenu
             menu.addItem(tagItem)
-        } else if tagName == nil {
-            add(menu, "粘贴", #selector(paste))
-            add(menu, "新建文件夹", #selector(createFolder))
-            add(menu, "新建文件", #selector(createFile))
+
+            menu.addItem(.separator())
+
+            // 7. 移到废纸篓 & 直接删除…
+            let trashItem = add(menu, targetItems.count == 1 ? "移到废纸篓" : "将 \(targetItems.count) 项移到废纸篓", #selector(trashSelected))
+            trashItem.keyEquivalent = "\u{08}"
+            trashItem.keyEquivalentModifierMask = [.command]
+
+            let deleteItem = add(menu, "直接删除…", #selector(deleteImmediately))
+            deleteItem.keyEquivalent = "\u{08}"
+            deleteItem.keyEquivalentModifierMask = [.command, .option]
+
+            menu.addItem(.separator())
+
+            // 8. 终端 & 访达
+            add(menu, "在终端中打开", #selector(openInTerminal))
+            add(menu, "在 Finder 中显示", #selector(revealInFinder))
+        } else {
+            // 空白处右键
+            if tagName == nil {
+                add(menu, "新建文件夹", #selector(createFolder))
+                add(menu, "新建文件", #selector(createFile))
+                menu.addItem(.separator())
+                add(menu, "粘贴", #selector(paste))
+                menu.addItem(.separator())
+            }
+            add(menu, "在终端中打开", #selector(openInTerminal))
+            add(menu, "在 Finder 中显示", #selector(revealInFinder))
+            menu.addItem(.separator())
+            add(menu, "刷新", #selector(refresh))
         }
-        menu.addItem(.separator())
-        add(menu, hasSelection ? "移到废纸篓" : "刷新", hasSelection ? #selector(trashSelected) : #selector(refresh))
-        if hasSelection {
-            add(menu, "重命名", #selector(renameSelected))
-        }
-        menu.addItem(.separator())
-        add(menu, "在终端中打开", #selector(openInTerminal))
-        add(menu, "在 Finder 中显示", #selector(revealInFinder))
+
         return menu
     }
 
@@ -1362,16 +1984,89 @@ final class PaneView: NSView {
         return item
     }
 
-    @objc private func contextOpen() { openSelection() }
+    private func makeOpenWithSubmenu(for item: FileItem) -> NSMenu? {
+        let appURLs = NSWorkspace.shared.urlsForApplications(toOpen: item.url)
+        guard !appURLs.isEmpty else { return nil }
+        let submenu = NSMenu(title: "打开方式")
+        submenu.autoenablesItems = false
+
+        let defaultApp = NSWorkspace.shared.urlForApplication(toOpen: item.url)
+
+        for appURL in appURLs.prefix(10) {
+            let appName = FileManager.default.displayName(atPath: appURL.path)
+            let isDefault = (appURL.standardizedFileURL.path == defaultApp?.standardizedFileURL.path)
+            let title = isDefault ? "\(appName) (默认)" : appName
+            let m = NSMenuItem(title: title, action: #selector(openWithAppMenuItemClicked(_:)), keyEquivalent: "")
+            m.target = self
+            m.representedObject = (appURL: appURL, fileURL: item.url)
+            let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+            icon.size = NSSize(width: 16, height: 16)
+            m.image = icon
+            submenu.addItem(m)
+        }
+
+        submenu.addItem(.separator())
+        let otherItem = NSMenuItem(title: "其他…", action: #selector(openWithOtherAppClicked(_:)), keyEquivalent: "")
+        otherItem.target = self
+        otherItem.representedObject = item.url
+        submenu.addItem(otherItem)
+
+        return submenu
+    }
+
+    @objc private func openWithAppMenuItemClicked(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? (appURL: URL, fileURL: URL) else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open([pair.fileURL], withApplicationAt: pair.appURL, configuration: config, completionHandler: nil)
+    }
+
+    @objc private func openWithOtherAppClicked(_ sender: NSMenuItem) {
+        guard let fileURL = sender.representedObject as? URL else { return }
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if #available(macOS 11.0, *) {
+            panel.allowedContentTypes = [.application]
+        } else {
+            panel.allowedFileTypes = ["app"]
+        }
+        panel.message = "选取用于打开“\(fileURL.lastPathComponent)”的应用程序"
+        panel.prompt = "打开"
+        if let window {
+            panel.beginSheetModal(for: window) { resp in
+                if resp == .OK, let appURL = panel.url {
+                    let config = NSWorkspace.OpenConfiguration()
+                    NSWorkspace.shared.open([fileURL], withApplicationAt: appURL, configuration: config, completionHandler: nil)
+                }
+            }
+        } else if panel.runModal() == .OK, let appURL = panel.url {
+            let config = NSWorkspace.OpenConfiguration()
+            NSWorkspace.shared.open([fileURL], withApplicationAt: appURL, configuration: config, completionHandler: nil)
+        }
+    }
+
+    @objc private func contextQuickLook() {
+        delegate?.paneDidRequestQuickLook(self)
+    }
+
+    @objc private func contextOpen() {
+        let targets = effectiveContextItems
+        for item in targets {
+            open(item)
+            break
+        }
+    }
 
     @objc private func contextOpenInOtherPane() {
-        guard let item = currentSelection().first else { return }
+        guard let item = effectiveContextItems.first else { return }
         NotificationCenter.default.post(name: .openInOtherPane, object: item.url)
     }
 
     @objc private func toggleTagFromMenu(_ sender: NSMenuItem) {
         guard let tagName = sender.representedObject as? String else { return }
-        let selected = currentSelection()
+        let selected = effectiveContextItems
         for item in selected {
             Tags.toggleTag(on: item.url, tag: tagName)
         }
