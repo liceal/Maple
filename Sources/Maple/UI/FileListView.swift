@@ -1945,6 +1945,7 @@ enum ColumnResizeCursor {
 private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
+    private let tagDotsView = TagDotsView()
     /// 每种列一个标签，按需创建。
     private var valueLabels: [ListColumn: NSTextField] = [:]
     /// 列布局的来源：始终取列表里的最新布局，列宽变化后行内列位置不会停留在旧值。
@@ -1962,7 +1963,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         super.init(frame: .zero)
         self.identifier = identifier
 
-        for field in [icon, title] as [NSView] {
+        for field in [icon, title, tagDotsView] as [NSView] {
             field.translatesAutoresizingMaskIntoConstraints = true
             field.autoresizingMask = []
         }
@@ -1971,13 +1972,15 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         title.font = .systemFont(ofSize: 12.5)
         title.lineBreakMode = .byTruncatingMiddle
 
-        for field in [icon, title] as [NSView] { addSubview(field) }
+        for field in [icon, title, tagDotsView] as [NSView] { addSubview(field) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        tagDotsView.setColors([])
+        tagDotsView.isHidden = true
         if isInlineEditing {
             isInlineEditing = false
             isStartingEditing = false
@@ -2158,8 +2161,23 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
             let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
             // 访达同款：紧凑自适应文本宽度 + 内边距光标缓冲，且不超过列右边界
             titleWidth = min(maxAvailableWidth, max(50, ceil(textW) + 18))
+            tagDotsView.isHidden = true
         } else {
-            titleWidth = max(0, nameRight - nameTextX - dx)
+            let tagCount = item?.tags.count ?? 0
+            if tagCount > 0 {
+                let font = title.font ?? .systemFont(ofSize: 12.5)
+                let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
+                let dotsW = TagDotsView.preferredWidth(count: tagCount)
+                let maxTextW = max(20, maxAvailableWidth - dotsW - 6)
+                titleWidth = min(maxTextW, ceil(textW) + 2)
+                tagDotsView.isHidden = false
+                tagDotsView.frame = NSRect(x: nameX + titleWidth + 5,
+                                           y: (rowHeight - 12) / 2,
+                                           width: dotsW, height: 12)
+            } else {
+                titleWidth = max(0, nameRight - nameTextX - dx)
+                tagDotsView.isHidden = true
+            }
         }
 
         title.frame = NSRect(x: nameX,
@@ -2242,6 +2260,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         self.item = item
         icon.image = IconCache.shared.icon(for: item)
         title.stringValue = item.name
+        tagDotsView.setColors(item.tagColors)
         for (column, label) in valueLabels {
             configureLabel(label, for: column, item: item)
         }

@@ -6,6 +6,9 @@ cd "$(dirname "$0")"
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
+VERSION="${1:-${MAPLE_VERSION:-1.0.1}}"
+echo "→ 准备构建 Maple v${VERSION} ..."
+
 echo "→ 正在编译 Release (arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64 --disable-sandbox
 
@@ -82,8 +85,8 @@ package_maple_app() {
     <key>CFBundleExecutable</key><string>Maple</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -150,8 +153,8 @@ package_installer_app() {
     <key>CFBundleExecutable</key><string>MapleInstaller</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -225,13 +228,14 @@ trap 'rm -rf "$STAGE_DIR"' EXIT
 # 清理旧的窗口保存状态，确保首次启动始终以干净前台主窗口呈现
 rm -rf "$HOME/Library/Saved Application State/com.workbuddy.maple.savedState" "$HOME/Library/Saved Application State/com.workbuddy.qspacelite.savedState"
 
-# 1. 构建通用版 Maple.app（用于本机 /Applications 安装）
+# 1. 构建通用版 Maple.app
 APP="$STAGE_DIR/Maple.app"
 package_maple_app "$APP" "universal"
-rm -rf "../Maple.app" "/Applications/Maple.app"
-cp -R "$APP" "/Applications/Maple.app"
-
-VERSION="1.0.0"
+rm -rf "../Maple.app"
+if [ -d "/Applications" ] && [ -w "/Applications" ]; then
+    rm -rf "/Applications/Maple.app" 2>/dev/null || true
+    cp -R "$APP" "/Applications/Maple.app" 2>/dev/null || true
+fi
 
 # 2. 构建 Apple Silicon (arm64) 原生枫叶拖拽安装 DMG
 echo "→ 正在构建 Apple Silicon (arm64) 安装包..."
@@ -248,6 +252,11 @@ package_maple_app "$APP_X86" "x86_64"
 
 rm -f "../Maple-${VERSION}-x86_64.dmg"
 build_dmg "$APP_X86" "../Maple-${VERSION}-x86_64.dmg" "Maple"
+
+# 同步一份到当前项目的 dist 目录，方便 CI/CD 收集
+mkdir -p dist
+cp "../Maple-${VERSION}-arm64.dmg" "dist/"
+cp "../Maple-${VERSION}-x86_64.dmg" "dist/"
 
 # 4. 清理旧的冗余构建项
 rm -rf "../Maple (M系列).app" "../安装 Maple (M系列).dmg" "../安装 Maple (M系列).app" "../安装 Maple (M系列).zip" \

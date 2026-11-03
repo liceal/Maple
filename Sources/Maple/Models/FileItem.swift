@@ -13,6 +13,11 @@ struct FileItem: Hashable {
     let modified: Date
     let created: Date
     let kind: String
+    let tags: [String]
+
+    var tagColors: [NSColor] {
+        tags.map { Tags.color(named: $0) }
+    }
 
     /// 目录（且不是包）才可进入。包（.app 等）按 Finder 习惯当作文件打开。
     var isNavigable: Bool { isDirectory && !isPackage }
@@ -26,7 +31,8 @@ struct FileItem: Hashable {
         .fileSizeKey,
         .contentModificationDateKey,
         .creationDateKey,
-        .localizedTypeDescriptionKey
+        .localizedTypeDescriptionKey,
+        .tagNamesKey
     ]
     static let resourceKeySet: Set<URLResourceKey> = Set(resourceKeys)
 
@@ -52,6 +58,7 @@ struct FileItem: Hashable {
         self.modified = values.contentModificationDate ?? .distantPast
         self.created = values.creationDate ?? .distantPast
         self.kind = values.localizedTypeDescription ?? ""
+        self.tags = values.tagNames ?? []
     }
 
     /// 零磁盘 I/O 快速构造（供高性能搜索引擎直接从内存索引/stat 快照生成 FileItem）。
@@ -62,7 +69,8 @@ struct FileItem: Hashable {
          isSymbolicLink: Bool = false,
          size: Int64 = 0,
          modified: Date,
-         created: Date? = nil) {
+         created: Date? = nil,
+         tags: [String] = []) {
         self.url = url
         self.name = name
         self.isDirectory = isDirectory
@@ -73,6 +81,7 @@ struct FileItem: Hashable {
         self.modified = modified
         self.created = created ?? modified
         self.kind = IconCache.shared.kindDescription(forName: name, isDirectory: isDirectory, isPackage: isPackage)
+        self.tags = tags
     }
 
     /// 判断是否是废纸篓路径

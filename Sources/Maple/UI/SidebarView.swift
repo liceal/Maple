@@ -936,25 +936,40 @@ final class SidebarView: NSView {
         onSelectTag?(tagName)
     }
 
-    @objc private func renameTagClicked(_ sender: NSMenuItem) {
-        guard let oldName = sender.representedObject as? String ?? contextNode?.tag ?? contextNode?.title else { return }
-        let alert = NSAlert()
-        alert.messageText = "重命名标签"
-        alert.informativeText = "为标签“\(oldName)”输入新的名称："
-        alert.addButton(withTitle: "好")
-        alert.addButton(withTitle: "取消")
-
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        input.stringValue = oldName
-        alert.accessoryView = input
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            let newName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !newName.isEmpty, newName != oldName else { return }
-            Tags.renameTag(oldName: oldName, newName: newName)
-            reload()
+    func addNewTag() {
+        let newDef = Tags.addTag()
+        reload()
+        if let tagsGroup = nodes.first(where: { $0.title == SidebarCategory.tags.title }) {
+            outline.expandItem(tagsGroup)
         }
+        select(tag: newDef.name)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.startRenamingSelectedTag()
+        }
+    }
+
+    func startRenamingSelectedTag() {
+        let row = outline.selectedRow
+        guard row >= 0, let node = outline.item(atRow: row) as? SidebarNode, node.kind == .tag else { return }
+        let oldName = node.tag ?? node.title
+        outline.scrollRowToVisible(row)
+        guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SidebarItemCell else { return }
+        cell.startInlineEditing(oldName: oldName, onCommit: { [weak self] newName in
+            Tags.renameTag(oldName: oldName, newName: newName)
+            self?.reload()
+            self?.select(tag: newName)
+        }, onCancel: { [weak self] in
+            self?.reload()
+            self?.select(tag: oldName)
+        })
+    }
+
+    @objc private func renameTagClicked(_ sender: NSMenuItem) {
+        guard let tagName = sender.representedObject as? String ?? contextNode?.tag ?? contextNode?.title else { return }
+        select(tag: tagName)
+        startRenamingSelectedTag()
     }
 
     @objc private func openInOtherPaneClicked(_ sender: NSMenuItem) {
@@ -1080,7 +1095,7 @@ final class SidebarView: NSView {
         alert.addButton(withTitle: "移除")
         alert.addButton(withTitle: "取消")
         if alert.runModal() == .alertFirstButtonReturn {
-            Tags.renameTag(oldName: tagName, newName: "")
+            Tags.removeTag(named: tagName)
             reload()
         }
     }
@@ -1152,6 +1167,18 @@ final class SidebarOutlineView: NSOutlineView {
         let node = row >= 0 ? (item(atRow: row) as? SidebarNode) : nil
         return menuProvider?(node) ?? super.menu(for: event)
     }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.characters == "\r" {
+            if selectedRow >= 0, let node = item(atRow: selectedRow) as? SidebarNode, node.kind == .tag {
+                if let sidebar = delegate as? SidebarView {
+                    sidebar.startRenamingSelectedTag()
+                    return
+                }
+            }
+        }
+        super.keyDown(with: event)
+    }
 }
 
 // MARK: - 数据源 / 代理
@@ -1200,6 +1227,11 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
             let view = (outlineView.makeView(withIdentifier: identifier, owner: self) as? SidebarGroupCell)
                 ?? SidebarGroupCell(identifier: identifier)
             view.textField?.stringValue = node.title
+            let isTags = (node.title == SidebarCategory.tags.title)
+            view.plusButton.isHidden = !isTags
+            view.onAddTag = { [weak self] in
+                self?.addNewTag()
+            }
             return view
         }
         let identifier = NSUserInterfaceItemIdentifier("item")
@@ -1255,6 +1287,9 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
 // MARK: - 单元格
 
 private final class SidebarGroupCell: NSTableCellView {
+    let plusButton = NSButton()
+    var onAddTag: (() -> Void)?
+
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
         self.identifier = identifier
@@ -1264,11 +1299,32 @@ private final class SidebarGroupCell: NSTableCellView {
         field.textColor = .secondaryLabelColor
         addSubview(field)
         textField = field
+
+        plusButton.translatesAutoresizingMaskIntoConstraints = false
+        plusButton.bezelStyle = .regularSquare
+        plusButton.isBordered = false
+        plusButton.image = Theme.symbol("plus", size: 10, weight: .semibold)
+        plusButton.contentTintColor = .secondaryLabelColor
+        plusButton.toolTip = "添加标签"
+        plusButton.target = self
+        plusButton.action = #selector(plusButtonClicked)
+        plusButton.isHidden = true
+        addSubview(plusButton)
+
         NSLayoutConstraint.activate([
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            field.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
-            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
+            field.trailingAnchor.constraint(lessThanOrEqualTo: plusButton.leadingAnchor, constant: -4),
+            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+
+            plusButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            plusButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            plusButton.widthAnchor.constraint(equalToConstant: 16),
+            plusButton.heightAnchor.constraint(equalToConstant: 16)
         ])
+    }
+
+    @objc private func plusButtonClicked() {
+        onAddTag?()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1364,7 +1420,7 @@ private final class SidebarEjectButton: NSButton {
     }
 }
 
-private final class SidebarItemCell: NSTableCellView {
+private final class SidebarItemCell: NSTableCellView, NSTextFieldDelegate {
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let statusDot = NSView()
@@ -1373,6 +1429,82 @@ private final class SidebarItemCell: NSTableCellView {
     private var iconHeightConstraint: NSLayoutConstraint?
 
     var onEject: (() -> Void)?
+
+    private(set) var isInlineEditing: Bool = false
+    private var isStartingEditing = false
+    var onCommitRename: ((String) -> Void)?
+    var onCancelRename: (() -> Void)?
+    private var originalName: String = ""
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        if isInlineEditing {
+            endInlineEditing(commit: false)
+        }
+    }
+
+    func startInlineEditing(oldName: String, onCommit: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+        guard !isInlineEditing else { return }
+        isInlineEditing = true
+        isStartingEditing = true
+        self.originalName = oldName
+        self.onCommitRename = onCommit
+        self.onCancelRename = onCancel
+
+        title.isEditable = true
+        title.isSelectable = true
+        title.drawsBackground = true
+        title.backgroundColor = .textBackgroundColor
+        title.textColor = .labelColor
+        title.isBordered = true
+        title.lineBreakMode = .byClipping
+        title.cell?.isScrollable = true
+        title.wantsLayer = true
+        title.layer?.cornerRadius = 3
+        title.layer?.masksToBounds = true
+        title.layer?.borderWidth = 1
+        title.layer?.borderColor = NSColor.separatorColor.cgColor
+        title.delegate = self
+
+        window?.makeFirstResponder(title)
+        title.selectText(nil)
+        isStartingEditing = false
+    }
+
+    func endInlineEditing(commit: Bool) {
+        guard isInlineEditing else { return }
+        isInlineEditing = false
+        title.isEditable = false
+        title.isSelectable = false
+        title.drawsBackground = false
+        title.isBordered = false
+        title.layer?.borderWidth = 0
+        title.delegate = nil
+
+        let newName = title.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if commit && !newName.isEmpty && newName != originalName {
+            onCommitRename?(newName)
+        } else {
+            title.stringValue = originalName
+            onCancelRename?()
+        }
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard !isStartingEditing, isInlineEditing else { return }
+        endInlineEditing(commit: true)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            endInlineEditing(commit: true)
+            return true
+        } else if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            endInlineEditing(commit: false)
+            return true
+        }
+        return false
+    }
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {

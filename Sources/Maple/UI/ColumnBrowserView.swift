@@ -1289,6 +1289,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
 
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
+    private let tagDotsView = TagDotsView()
     private let chevron = NSImageView()
     private var isHiddenItem: Bool = false
     private var currentItem: FileItem?
@@ -1302,7 +1303,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         super.init(frame: .zero)
         self.identifier = identifier
 
-        for field in [icon, title, chevron] as [NSView] {
+        for field in [icon, title, tagDotsView, chevron] as [NSView] {
             field.translatesAutoresizingMaskIntoConstraints = true
             field.autoresizingMask = []
         }
@@ -1312,13 +1313,15 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         chevron.imageScaling = .scaleProportionallyDown
         chevron.contentTintColor = .tertiaryLabelColor
 
-        for field in [icon, title, chevron] as [NSView] { addSubview(field) }
+        for field in [icon, title, tagDotsView, chevron] as [NSView] { addSubview(field) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        tagDotsView.setColors([])
+        tagDotsView.isHidden = true
         if isInlineEditing {
             isInlineEditing = false
             isStartingEditing = false
@@ -1515,8 +1518,23 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
             let font = title.font ?? .systemFont(ofSize: 12.5)
             let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
             titleWidth = min(maxAvailableW, max(50, ceil(textW) + 18))
+            tagDotsView.isHidden = true
         } else {
-            titleWidth = max(0, nameRight - nameX)
+            let tagCount = currentItem?.tags.count ?? 0
+            if tagCount > 0 {
+                let font = title.font ?? .systemFont(ofSize: 12.5)
+                let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
+                let dotsW = TagDotsView.preferredWidth(count: tagCount)
+                let maxTextW = max(20, maxAvailableW - dotsW - 6)
+                titleWidth = min(maxTextW, ceil(textW) + 2)
+                tagDotsView.isHidden = false
+                tagDotsView.frame = NSRect(x: nameX + titleWidth + 5,
+                                           y: (height - 12) / 2,
+                                           width: dotsW, height: 12)
+            } else {
+                titleWidth = max(0, nameRight - nameX)
+                tagDotsView.isHidden = true
+            }
         }
 
         title.frame = NSRect(x: nameX, y: (height - textHeight) / 2, width: titleWidth, height: textHeight)
@@ -1527,6 +1545,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         self.isHiddenItem = item.isHidden
         icon.image = IconCache.shared.icon(for: item)
         title.stringValue = item.name
+        tagDotsView.setColors(item.tagColors)
         chevron.isHidden = !item.isNavigable
         chevron.image = Theme.symbol("chevron.right", size: 9, weight: .semibold)
         updateColors()

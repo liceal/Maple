@@ -1967,19 +1967,13 @@ final class PaneView: NSView {
                 menu.addItem(.separator())
             }
 
-            // 6. 标记
-            let tagItem = NSMenuItem(title: "标记", action: nil, keyEquivalent: "")
-            let tagSubmenu = NSMenu(title: "标记")
-            tagSubmenu.autoenablesItems = false
-            for def in Tags.all {
-                let m = NSMenuItem(title: def.name, action: #selector(toggleTagFromMenu(_:)), keyEquivalent: "")
-                m.target = self
-                m.representedObject = def.name
-                m.image = Tags.dotImage(color: def.color, diameter: 12)
-                tagSubmenu.addItem(m)
-            }
-            tagItem.submenu = tagSubmenu
-            menu.addItem(tagItem)
+            // 6. 标记（高保真横排颜色打勾圆点 + 标签…）
+            let colorPickerItem = TagColorPickerMenuItem(targetURLs: targetItems.map { $0.url })
+            menu.addItem(colorPickerItem)
+
+            let tagsManageItem = NSMenuItem(title: "标签…", action: #selector(showTagsManagement), keyEquivalent: "")
+            tagsManageItem.target = self
+            menu.addItem(tagsManageItem)
 
             menu.addItem(.separator())
 
@@ -2115,6 +2109,11 @@ final class PaneView: NSView {
             Tags.toggleTag(on: item.url, tag: tagName)
         }
         refresh()
+    }
+
+    @objc private func showTagsManagement() {
+        // 激活标签视图或刷新标签
+        NotificationCenter.default.post(name: .tagsDidChange, object: nil)
     }
 }
 

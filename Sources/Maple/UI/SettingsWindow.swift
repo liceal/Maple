@@ -820,7 +820,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         nameLabel.font = .systemFont(ofSize: 18, weight: .bold)
         stack.addArrangedSubview(nameLabel)
 
-        let verLabel = NSTextField(labelWithString: "版本 2.0 (Build 2026.11)")
+        let ver = UpdateChecker.currentVersion
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "2026.11"
+        let verLabel = NSTextField(labelWithString: "版本 \(ver) (Build \(build))")
         verLabel.font = .systemFont(ofSize: 12.5)
         verLabel.textColor = .secondaryLabelColor
         stack.addArrangedSubview(verLabel)
@@ -841,6 +843,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         descLabel.textColor = .secondaryLabelColor
         stack.addArrangedSubview(descLabel)
 
+        let updateButton = NSButton(title: "检查更新…", target: self, action: #selector(checkForUpdatesClicked(_:)))
+        updateButton.bezelStyle = .rounded
+        updateButton.font = .systemFont(ofSize: 12)
+        stack.addArrangedSubview(updateButton)
+
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
@@ -848,6 +855,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             stack.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -30)
         ])
         return content
+    }
+
+    @objc private func checkForUpdatesClicked(_ sender: NSButton) {
+        sender.isEnabled = false
+        sender.title = "正在检查更新…"
+        UpdateChecker.shared.checkForUpdates(isUserInitiated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak sender] in
+            sender?.isEnabled = true
+            sender?.title = "检查更新…"
+        }
     }
 
     // MARK: - 9. 占位面板
