@@ -6,8 +6,12 @@ cd "$(dirname "$0")"
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-VERSION="${1:-${MAPLE_VERSION:-1.0.3}}"
-echo "→ 准备构建 Maple v${VERSION} ..."
+# 如果没有传入版本参数，优先自动读取 Git 最新 Tag，没有则回退至 1.0.0
+GIT_LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git tag -l "v*" --sort=-v:refname 2>/dev/null | head -n 1 || true)
+DETECTED_VERSION=$(echo "$GIT_LATEST_TAG" | sed -E 's/^v//')
+
+VERSION="${1:-${MAPLE_VERSION:-${DETECTED_VERSION:-1.0.0}}}"
+echo "→ 准备构建 Maple v${VERSION} (来源: ${1:+入参}${MAPLE_VERSION:+环境变量}${DETECTED_VERSION:+Git Tag: $GIT_LATEST_TAG}) ..."
 
 # 检测是否有可用的 Apple Developer / Developer ID 签名证书
 if [ -z "$SIGN_IDENTITY" ]; then
