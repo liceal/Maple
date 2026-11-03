@@ -6,8 +6,20 @@ cd "$(dirname "$0")"
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-VERSION="${1:-${MAPLE_VERSION:-1.0.2}}"
+VERSION="${1:-${MAPLE_VERSION:-1.0.3}}"
 echo "→ 准备构建 Maple v${VERSION} ..."
+
+# 检测是否有可用的 Apple Developer / Developer ID 签名证书
+if [ -z "$SIGN_IDENTITY" ]; then
+    SIGN_IDENTITY=$(security find-identity -p codesigning -v 2>/dev/null | grep -E "Developer ID Application|Apple Development" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+fi
+
+if [ -n "$SIGN_IDENTITY" ]; then
+    echo "✓ 自动检测到 Apple 代码签名证书: $SIGN_IDENTITY"
+else
+    echo "⚠️ 未检测到 Apple 开发者证书，将使用 Ad-Hoc 本地签名 (-)"
+    SIGN_IDENTITY="-"
+fi
 
 echo "→ 正在编译 Release (arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64 --disable-sandbox
@@ -26,14 +38,21 @@ clean_xattrs_and_sign() {
     # 彻底清除所有文件与目录的扩展属性（包括 com.apple.FinderInfo, com.apple.provenance, com.apple.quarantine 等）
     xattr -c -r "$target" 2>/dev/null || true
 
+    local entitlements_args=()
+    if [ -f "Resources/Maple.entitlements" ]; then
+        entitlements_args=(--entitlements "Resources/Maple.entitlements")
+    fi
+
     # 如果存在内嵌的 Maple.app，先给内嵌的 Maple.app 深度签名
     if [ -d "$target/Contents/Resources/Maple.app" ]; then
         xattr -c -r "$target/Contents/Resources/Maple.app" 2>/dev/null || true
-        codesign --force --deep --sign - "$target/Contents/Resources/Maple.app"
+        codesign --force --deep --options runtime "${entitlements_args[@]}" --sign "$SIGN_IDENTITY" "$target/Contents/Resources/Maple.app" 2>/dev/null || \
+        codesign --force --deep --sign "$SIGN_IDENTITY" "$target/Contents/Resources/Maple.app"
     fi
 
     # 签名外层应用
-    codesign --force --deep --sign - "$target"
+    codesign --force --deep --options runtime "${entitlements_args[@]}" --sign "$SIGN_IDENTITY" "$target" 2>/dev/null || \
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$target"
 
     # 严苛校验代码签名完整性
     codesign --verify --deep --strict "$target" 2>/dev/null || true
@@ -219,6 +238,12 @@ build_dmg() {
     fi
 
     rm -rf "$dmg_temp"
+
+    # 如果有有效证书，给 DMG 签名
+    if [ "$SIGN_IDENTITY" != "-" ]; then
+        codesign --force --sign "$SIGN_IDENTITY" "$output_dmg" 2>/dev/null || true
+    fi
+
     echo "✓ 已生成原生枫叶拖入安装 DMG: $output_dmg ($(du -sh "$output_dmg" | awk '{print $1}'))"
 }
 
@@ -242,21 +267,21 @@ echo "→ 正在构建 Apple Silicon (arm64) 安装包..."
 APP_ARM="$STAGE_DIR/Maple-arm64/Maple.app"
 package_maple_app "$APP_ARM" "arm64"
 
-rm -f "../Maple-${VERSION}-arm64.dmg"
-build_dmg "$APP_ARM" "../Maple-${VERSION}-arm64.dmg" "Maple"
+rm -f "../Maple-arm64.dmg"
+build_dmg "$APP_ARM" "../Maple-arm64.dmg" "Maple"
 
 # 3. 构建 Intel 芯片 (x86_64) 原生枫叶拖拽安装 DMG
 echo "→ 正在构建 Intel (x86_64) 安装包..."
 APP_X86="$STAGE_DIR/Maple-x86_64/Maple.app"
 package_maple_app "$APP_X86" "x86_64"
 
-rm -f "../Maple-${VERSION}-x86_64.dmg"
-build_dmg "$APP_X86" "../Maple-${VERSION}-x86_64.dmg" "Maple"
+rm -f "../Maple-x86_64.dmg"
+build_dmg "$APP_X86" "../Maple-x86_64.dmg" "Maple"
 
-# 同步一份到当前项目的 dist 目录，方便 CI/CD 收集
+# 同步到当前项目的 dist 目录，方便 CI/CD 收集
 mkdir -p dist
-cp "../Maple-${VERSION}-arm64.dmg" "dist/"
-cp "../Maple-${VERSION}-x86_64.dmg" "dist/"
+cp "../Maple-arm64.dmg" "dist/"
+cp "../Maple-x86_64.dmg" "dist/"
 
 # 4. 清理旧的冗余构建项
 rm -rf "../Maple (M系列).app" "../安装 Maple (M系列).dmg" "../安装 Maple (M系列).app" "../安装 Maple (M系列).zip" \
@@ -266,6 +291,6 @@ rm -rf "../Maple (M系列).app" "../安装 Maple (M系列).dmg" "../安装 Maple
 echo ""
 echo "=========================================================="
 echo "✓ 全部构建完成并输出至 $(cd .. && pwd):"
-echo "  1. Apple Silicon DMG: Maple-${VERSION}-arm64.dmg"
-echo "  2. Intel DMG:         Maple-${VERSION}-x86_64.dmg"
+echo "  1. Apple Silicon DMG: Maple-arm64.dmg"
+echo "  2. Intel DMG:         Maple-x86_64.dmg"
 echo "=========================================================="

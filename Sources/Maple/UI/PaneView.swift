@@ -572,9 +572,13 @@ final class PaneView: NSView {
         pathBar.invalidateFolderCache()
         refreshPathBar()
         if items.isEmpty {
-            if FileItem.isTrash(url: currentURL) && !FileItem.checkTrashPermission() {
-                emptyLabel.stringValue = "未能读取废纸篓内容\n请在「系统设置」>「隐私与安全性」授予 Maple 权限".localized
-                promptTrashPermissionIfNeeded()
+            if FileItem.isTrash(url: currentURL) {
+                if !FileItem.checkTrashPermission() {
+                    emptyLabel.stringValue = "未能读取废纸篓内容\n请在「系统设置」>「隐私与安全性」授予 Maple 权限".localized
+                    promptTrashPermissionIfNeeded()
+                } else {
+                    emptyLabel.stringValue = "废纸篓为空".localized
+                }
             } else {
                 emptyLabel.stringValue = "文件夹为空".localized
             }
