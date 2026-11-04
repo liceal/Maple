@@ -63,9 +63,10 @@ jobs:
         with:
           name: "Maple v${{ env.VERSION }}"
           tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
           files: |
             dist/*.dmg
             dist/SHA256SUMS.txt
-          generate_release_notes: true
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

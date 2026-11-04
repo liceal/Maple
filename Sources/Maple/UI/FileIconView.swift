@@ -109,6 +109,10 @@ final class FileIconView: NSView {
         scroll.onSwipeBegin = { [weak self] in
             self?.handleSwipeBegin()
         }
+        scroll.canSwipe = { [weak self] in
+            guard let self else { return false }
+            return (self.canSwipeBack?() ?? false) || (self.canSwipeForward?() ?? false)
+        }
         scroll.onSwipeChange = { [weak self] totalFingerDX in
             self?.handleSwipeChange(totalFingerDX: totalFingerDX)
         }
@@ -159,6 +163,11 @@ final class FileIconView: NSView {
     private func handleSwipeChange(totalFingerDX: CGFloat) {
         let canBack = canSwipeBack?() ?? false
         let canFwd = canSwipeForward?() ?? false
+        guard canBack || canFwd else {
+            swipeBadge.isHidden = true
+            swipeBadge.alphaValue = 0
+            return
+        }
         // 兼容「双指右滑后退」与「无前进历史时双指左滑后退」两种操作习惯
         let isBack = (totalFingerDX >= 0) ? true : (!canFwd && canBack)
         let isRightSlide = (totalFingerDX >= 0)
@@ -398,6 +407,9 @@ final class FileIconView: NSView {
     func select(urls: Set<URL>) {
         restoreSelection(urls)
         updateVisibleSelectionStates()
+        if let first = collection.selectionIndexPaths.first {
+            collection.scrollToItems(at: [first], scrollPosition: .nearestHorizontalEdge)
+        }
     }
 
     // MARK: - 就地重命名（访达同款）
@@ -1178,6 +1190,7 @@ final class IconSectionHeader: NSView {
 
 final class IconScrollView: NSScrollView {
 
+    var canSwipe: (() -> Bool)?
     var onSwipeBegin: (() -> Void)?
     var onSwipeChange: ((CGFloat) -> Void)?
     var onSwipeEnd: ((_ totalFingerDX: CGFloat, _ velocityX: CGFloat, _ cancelled: Bool) -> Void)?
@@ -1195,6 +1208,13 @@ final class IconScrollView: NSScrollView {
     private var suppressMomentum: Bool = false
 
     override func scrollWheel(with event: NSEvent) {
+        // 若当前视图禁止左右滑动前进/后退（如标签视图、「所有标签…」等），直接走原生纵向滚动
+        if let canSwipe, !canSwipe() {
+            mode = .undecided
+            suppressMomentum = false
+            super.scrollWheel(with: event)
+            return
+        }
         // 仅对触摸板 / Magic Mouse 高精度连续手势启用丝滑横向滑动导航
         guard event.hasPreciseScrollingDeltas else {
             super.scrollWheel(with: event)

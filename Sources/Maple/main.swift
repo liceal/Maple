@@ -81,15 +81,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.terminate(nil)
                 return nil
             }
-            if flags == [.control] && chars == "z" {
+            let isUndoKey = ((flags == [.control] || flags == [.command]) && chars == "z")
+            if isUndoKey {
                 if let responder = NSApp.keyWindow?.firstResponder,
                    (responder is NSTextView || responder is NSTextField) {
                     if NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
                         return nil
                     }
                 }
-                self?.workspace?.undoAction()
-                return nil
+                if self?.isSidebarFocused() == true {
+                    if self?.sidebar?.undoTagDeletion() == true {
+                        return nil
+                    }
+                }
+                if flags == [.control] {
+                    self?.workspace?.undoAction()
+                    return nil
+                }
             } else if flags == [.control, .shift] && chars == "z" {
                 if let responder = NSApp.keyWindow?.firstResponder,
                    (responder is NSTextView || responder is NSTextField) {
@@ -213,6 +221,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         sidebar.onSelectTag = { [weak self] tag in
             self?.workspace?.showTagInFocusedPane(tag)
+            self?.updateNavTitle()
+        }
+        sidebar.onSelectAllTags = { [weak self] in
+            self?.workspace?.showAllTagsInFocusedPane()
+            self?.updateNavTitle()
+        }
+        workspace.onRequestDeleteTag = { [weak self] tag in
+            self?.sidebar?.confirmAndDeleteTag(named: tag)
+        }
+        sidebar.onTagRemoved = { [weak self] tag in
+            self?.workspace?.handleTagRemoved(tag)
+            self?.updateNavTitle()
+        }
+        sidebar.isShowingTag = { [weak self] tag in
+            self?.workspace?.isShowingTag(tag) ?? false
+        }
+        sidebar.getURLsForTagInPanes = { [weak self] tag in
+            self?.workspace?.getURLsForTagInPanes(tag) ?? []
         }
         sidebar.onRequestConnectServer = { [weak self] entry in
             self?.showConnectServerWindow(initialEntry: entry)
@@ -234,7 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.updateNavTitle()
         }
         workspace.onFocusChange = { [weak self] pane in
-            if let tag = pane.tagName, pane.isTagView {
+            if pane.isAllTagsMode {
+                self?.sidebar?.selectAllTagsRow(scrollToVisible: false)
+            } else if let tag = pane.tagName, pane.isTagView {
                 self?.sidebar?.select(tag: tag)
             } else {
                 self?.sidebar?.select(url: pane.currentURL)
@@ -324,16 +352,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let pane = workspace.focusedPane {
             sidebar.select(url: pane.currentURL)
         }
-        // 处理"在新窗格中打开"的跨组件通知
+        // 处理"在新窗格中打开"与"在新窗口定位"的跨组件通知
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(handleOpenInOtherPane(_:)),
                                                name: .openInOtherPane,
+                                               object: nil)
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(handleLocateInOtherPane(_:)),
+                                               name: .locateInOtherPane,
                                                object: nil)
     }
 
     @objc private func handleOpenInOtherPane(_ note: Notification) {
         guard let url = note.object as? URL else { return }
         workspace?.openInOtherPane(url)
+    }
+
+    @objc private func handleLocateInOtherPane(_ note: Notification) {
+        guard let url = note.object as? URL else { return }
+        workspace?.locateInOtherPane(url)
     }
 
     // MARK: 顶部工具条
@@ -649,7 +686,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 return
             }
         }
+        if isSidebarFocused() {
+            if sidebar?.undoTagDeletion() == true {
+                return
+            }
+        }
         workspace?.undoAction()
+    }
+
+    private func isSidebarFocused() -> Bool {
+        guard let sidebar else { return false }
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: sidebar)
     }
 
     @objc private func redoMenuAction() {

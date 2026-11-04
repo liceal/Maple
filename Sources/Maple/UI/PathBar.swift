@@ -258,15 +258,41 @@ final class PathBar: NSView {
 
     // MARK: - 数据
 
+    /// 是否处于清空空白状态（删除标签等场景）
+    private var isBlank = false
+
     /// 显示标签徽章（分栏/列表都可用），点它不进入路径编辑。
     func setBadge(title: String, color: NSColor) {
+        isBlank = false
         badge = (title, color)
         trailing = nil
         updateDisplay()
         rebuildLayout()
     }
 
+    /// 清空标签徽章
+    func clearBadge() {
+        badge = nil
+        updateDisplay()
+        rebuildLayout()
+    }
+
+    /// 设置为完全空白未选中状态
+    func setBlank() {
+        badge = nil
+        isBlank = true
+        crumbs = []
+        trailing = nil
+        items = []
+        toolTip = nil
+        editor.stringValue = ""
+        starButton.isHidden = true
+        needsDisplay = true
+        rebuildLayout()
+    }
+
     func setURL(_ newURL: URL, trailing newTrailing: Trailing? = nil) {
+        isBlank = false
         // 一旦设置真实路径，标签徽章必须让位
         let hadBadge = badge != nil
         badge = nil
@@ -283,6 +309,15 @@ final class PathBar: NSView {
     }
 
     private func updateDisplay() {
+        if isBlank {
+            crumbs = []
+            toolTip = nil
+            editor.stringValue = ""
+            starButton.isOn = false
+            starButton.isHidden = true
+            needsDisplay = true
+            return
+        }
         if let badge {
             crumbs = []
             toolTip = "标签：" + badge.title
@@ -369,6 +404,7 @@ final class PathBar: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        if isBlank { return }
 
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
 

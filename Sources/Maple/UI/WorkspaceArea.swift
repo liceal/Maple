@@ -179,6 +179,8 @@ final class WorkspaceArea: NSView {
     var onViewModeChange: ((PaneView) -> Void)?
     /// 个人收藏内容变化（侧栏需要刷新）。
     var onFavoritesChange: (() -> Void)?
+    /// 请求删除某个标签（弹出访达样式的删除确认遮罩弹窗）。
+    var onRequestDeleteTag: ((String) -> Void)?
 
     override var isFlipped: Bool { true }
 
@@ -467,6 +469,9 @@ final class WorkspaceArea: NSView {
                 pane.restoreViewMode(mode)
             }
             pane.delegate = self
+            pane.onRequestDeleteTag = { [weak self] tag in
+                self?.onRequestDeleteTag?(tag)
+            }
             addSubview(pane)
             panes.append(pane)
         }
@@ -515,7 +520,41 @@ final class WorkspaceArea: NSView {
         (focusedPane ?? panes.first)?.showTag(tag)
     }
 
+    /// 侧栏点击「所有标签…」：交给焦点窗格切换为访达同款「所有标签」分栏视图。
+    func showAllTagsInFocusedPane(selecting initialTag: String? = nil) {
+        (focusedPane ?? panes.first)?.showAllTags(selecting: initialTag)
+    }
+
+    /// 查询是否有窗格正在展示指定标签
+    func isShowingTag(_ tag: String) -> Bool {
+        panes.contains(where: { $0.isTagView && $0.tagName == tag })
+    }
+
+    /// 获取所有正在展示指定标签的窗格中已加载的文件 URLs
+    func getURLsForTagInPanes(_ tag: String) -> [URL] {
+        var urls: [URL] = []
+        for pane in panes where pane.isTagView && pane.tagName == tag {
+            urls.append(contentsOf: pane.items.map { $0.url })
+        }
+        return urls
+    }
+
+    /// 当某个标签被删除时：清空所有正在展示此标签的窗格并置于未选中状态
+    func handleTagRemoved(_ tagName: String) {
+        for pane in panes {
+            if pane.tagName == tagName {
+                pane.clearTagView()
+            }
+        }
+    }
+
     func openInOtherPane(_ url: URL) {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {
+            // 普通文件不能作为目录打开，自动转换为在另一个窗格定位该文件
+            locateInOtherPane(url)
+            return
+        }
         if panes.count <= 1 {
             setMode(.dualV)
         }
@@ -526,6 +565,27 @@ final class WorkspaceArea: NSView {
         let target = panes.first { $0 !== focusedPane } ?? panes[1]
         target.navigate(to: url)
         setFocused(target)
+    }
+
+    /// 在另一个窗格中打开该项目所在的父文件夹，并自动滚动高亮选中该项目
+    func locateInOtherPane(_ url: URL) {
+        let parent = url.deletingLastPathComponent().standardizedFileURL
+        if panes.count <= 1 {
+            setMode(.dualV)
+        }
+        guard panes.count > 1 else {
+            focusedPane?.navigate(to: parent)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.focusedPane?.select(urls: [url.standardizedFileURL])
+            }
+            return
+        }
+        let target = panes.first { $0 !== focusedPane } ?? panes[1]
+        target.navigate(to: parent)
+        setFocused(target)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            target.select(urls: [url.standardizedFileURL])
+        }
     }
 
     func reloadAll() {

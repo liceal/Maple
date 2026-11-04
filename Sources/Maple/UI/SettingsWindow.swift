@@ -1314,6 +1314,12 @@ private final class CategoryRowView: NSTableRowView {
         .normal
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        isHovered = false
+        needsDisplay = true
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let existing = trackingArea {

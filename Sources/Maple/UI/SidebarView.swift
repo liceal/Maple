@@ -3,7 +3,7 @@ import AppKit
 /// 侧栏数据节点：分组标题（.group）、文件夹（.folder）、远程服务器（.server）、连接服务器入口（.connectServer）或标签（.tag）。
 final class SidebarNode: NSObject {
 
-    enum Kind { case group, folder, server, connectServer, tag }
+    enum Kind { case group, folder, server, connectServer, tag, allTags }
 
     let kind: Kind
     let title: String
@@ -63,10 +63,28 @@ final class SidebarView: NSView {
     var onOpenInOtherPane: ((URL) -> Void)?
     /// 点击某个标签。
     var onSelectTag: ((String) -> Void)?
+    /// 点击「所有标签…」。
+    var onSelectAllTags: (() -> Void)?
+    /// 某个标签被移除，通知主窗格清空对应标签视图
+    var onTagRemoved: ((String) -> Void)?
+    /// 查询窗口是否正在显示某标签
+    var isShowingTag: ((String) -> Bool)?
+    /// 获取正在显示某标签的窗格中已加载的 URLs
+    var getURLsForTagInPanes: ((String) -> [URL])?
     /// 点击「连接服务器…」或未挂载的已保存服务器条目。
     var onRequestConnectServer: ((ServerEntry?) -> Void)?
     /// 点击底栏设置齿轮按钮。
     var onOpenSettings: (() -> Void)?
+
+    /// 删除标签撤销记录
+    struct TagDeletionRecord {
+        let tagDef: TagDefinition
+        let originalIndex: Int
+        let affectedURLs: [URL]
+        let wasShowingInPane: Bool
+    }
+    private var tagUndoStack: [TagDeletionRecord] = []
+    var hasUndoableTagDeletion: Bool { !tagUndoStack.isEmpty }
 
     /// 获取当前焦点窗格正在浏览的 URL，供刷新时安全恢复选中项，避免外置卷挂载时误选新卷
     var currentURLProvider: (() -> URL?)?
@@ -91,6 +109,7 @@ final class SidebarView: NSView {
     private var isRestoringSelection = false
     /// 最近一次右键命中的节点（菜单动作针对它，而不是选中行）。
     private var contextNode: SidebarNode?
+    private var activeAllTagsSelection: String?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -134,6 +153,7 @@ final class SidebarView: NSView {
         outline.target = self
         outline.action = #selector(handleClick)
         outline.menuProvider = { [weak self] node in self?.makeContextMenu(for: node) }
+        outline.onUndo = { [weak self] in self?.undoTagDeletion() ?? false }
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = outline
@@ -241,14 +261,10 @@ final class SidebarView: NSView {
 
         menu.addItem(.separator())
 
-        let connectItem = NSMenuItem(title: "连接服务器…", action: #selector(connectServerMenuClicked), keyEquivalent: "k")
-        connectItem.keyEquivalentModifierMask = [.command]
-        connectItem.target = self
-        menu.addItem(connectItem)
-
-        let browseNet = NSMenuItem(title: "浏览网络邻居 (/Network)", action: #selector(browseNetworkMenuClicked), keyEquivalent: "")
-        browseNet.target = self
-        menu.addItem(browseNet)
+        let colorfulItem = NSMenuItem(title: "彩色图标", action: #selector(toggleColorfulIconsClicked), keyEquivalent: "")
+        colorfulItem.target = self
+        colorfulItem.state = (AppSettings.sidebarIconStyle == .colorful) ? .on : .off
+        menu.addItem(colorfulItem)
 
         menu.addItem(.separator())
 
@@ -267,6 +283,10 @@ final class SidebarView: NSView {
         menu.addItem(refresh)
 
         return menu
+    }
+
+    @objc private func toggleColorfulIconsClicked(_ sender: NSMenuItem) {
+        AppSettings.sidebarIconStyle = (AppSettings.sidebarIconStyle == .colorful) ? .minimalist : .colorful
     }
 
     /// 右键菜单：空白处或分组标题唤起侧栏通用操作菜单；具体节点提供针对性操作 + 展示分类选项。
@@ -291,33 +311,91 @@ final class SidebarView: NSView {
             return menu
         }
 
-        // 2. 标签
+        // 1b. 所有标签… 入口
+        if node.kind == .allTags {
+            let showAll = NSMenuItem(title: "显示所有标签…", action: #selector(showAllTagsFromMenuClicked), keyEquivalent: "")
+            showAll.target = self
+            menu.addItem(showAll)
+            let extraTags = Tags.allSystemTags
+            if !extraTags.isEmpty {
+                menu.addItem(.separator())
+                for def in extraTags {
+                    let item = NSMenuItem(title: def.name, action: #selector(openTagInOtherPaneClicked(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = def.name
+                    item.image = def.colorKey == "none" ? Tags.paletteIcon(color: nil, diameter: 12) : Tags.dotImage(color: def.color, diameter: 12)
+                    menu.addItem(item)
+                }
+            }
+            return menu
+        }
+
+        // 2. 标签（对齐访达原生菜单风格）
         if node.kind == .tag {
             let tagName = node.tag ?? node.title
-            let openItem = NSMenuItem(title: "在新窗格中打开", action: #selector(openTagInOtherPaneClicked), keyEquivalent: "")
+
+            // 1. 在新标签页中打开
+            let openItem = NSMenuItem(title: "在新标签页中打开", action: #selector(openTagInOtherPaneClicked), keyEquivalent: "")
             openItem.target = self
             openItem.representedObject = tagName
             menu.addItem(openItem)
 
-            let renameItem = NSMenuItem(title: "重命名“\(tagName)”…", action: #selector(renameTagClicked), keyEquivalent: "")
-            renameItem.target = self
-            renameItem.representedObject = tagName
-            menu.addItem(renameItem)
+            menu.addItem(.separator())
 
-            let deleteItem = NSMenuItem(title: "从列表中移除“\(tagName)”", action: #selector(deleteTagClicked), keyEquivalent: "")
+            // 2. 从边栏中移除
+            let hideItem = NSMenuItem(title: "从边栏中移除", action: #selector(hideTagFromSidebarClicked), keyEquivalent: "")
+            hideItem.target = self
+            hideItem.representedObject = tagName
+            menu.addItem(hideItem)
+
+            // 3. 删除标签 “xxx”…
+            let deleteItem = NSMenuItem(title: "删除标签 “\(tagName)”…", action: #selector(deleteTagClicked), keyEquivalent: "")
             deleteItem.target = self
             deleteItem.representedObject = tagName
             menu.addItem(deleteItem)
 
             menu.addItem(.separator())
-            let refresh = NSMenuItem(title: "刷新", action: #selector(refreshClicked), keyEquivalent: "")
-            refresh.target = self
-            menu.addItem(refresh)
+
+            // 4. 给“xxx”重新命名
+            let renameItem = NSMenuItem(title: "给“\(tagName)”重新命名", action: #selector(renameTagClicked), keyEquivalent: "")
+            renameItem.target = self
+            renameItem.representedObject = tagName
+            menu.addItem(renameItem)
 
             menu.addItem(.separator())
-            let categoryItem = NSMenuItem(title: "展示分类", action: nil, keyEquivalent: "")
-            categoryItem.submenu = makeCategorySubmenu()
-            menu.addItem(categoryItem)
+
+            // 5. 调色盘颜色选项（单选带勾选状态）
+            let tagDef = Tags.all.first(where: { $0.name == tagName })
+            let currentColorKey = tagDef?.colorKey ?? ""
+
+            // 无颜色
+            let noneItem = NSMenuItem(title: "无颜色", action: #selector(colorPickedForTag(_:)), keyEquivalent: "")
+            noneItem.target = self
+            noneItem.representedObject = (tagName: tagName, colorKey: "none")
+            noneItem.image = makePaletteIcon(color: nil)
+            noneItem.state = (currentColorKey == "none" || tagDef?.xattrIndex == 0) ? .on : .off
+            menu.addItem(noneItem)
+
+            // 红色、橙色、黄色、绿色、蓝色、紫色、灰色
+            let colorChoices: [(key: String, title: String, color: NSColor)] = [
+                ("red", "红色", .systemRed),
+                ("orange", "橙色", .systemOrange),
+                ("yellow", "黄色", .systemYellow),
+                ("green", "绿色", .systemGreen),
+                ("blue", "蓝色", .systemBlue),
+                ("purple", "紫色", .systemPurple),
+                ("gray", "灰色", .systemGray)
+            ]
+
+            for choice in colorChoices {
+                let item = NSMenuItem(title: choice.title, action: #selector(colorPickedForTag(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = (tagName: tagName, colorKey: choice.key)
+                item.image = makePaletteIcon(color: choice.color)
+                item.state = (currentColorKey == choice.key) ? .on : .off
+                menu.addItem(item)
+            }
+
             return menu
         }
 
@@ -486,20 +564,6 @@ final class SidebarView: NSView {
                 menu.addItem(remove)
             }
 
-            // 移到废纸篓与直接删除
-            if !node.isTrash {
-                menu.addItem(.separator())
-                let trashItem = NSMenuItem(title: "移到废纸篓", action: #selector(trashContextNodeClicked), keyEquivalent: "")
-                trashItem.target = self
-                trashItem.representedObject = url
-                menu.addItem(trashItem)
-
-                let deleteItem = NSMenuItem(title: "直接删除…", action: #selector(deleteContextNodeImmediatelyClicked), keyEquivalent: "")
-                deleteItem.target = self
-                deleteItem.representedObject = url
-                menu.addItem(deleteItem)
-            }
-
             menu.addItem(.separator())
             let refresh = NSMenuItem(title: "刷新", action: #selector(refreshClicked), keyEquivalent: "")
             refresh.target = self
@@ -531,8 +595,13 @@ final class SidebarView: NSView {
     @objc private func volumesChanged() { reload() }
 
     func reload(preservingCurrentURL currentURL: URL? = nil) {
+        // 保存当前视口的滚动位置，避免增删标签或刷新时滚动条跳回顶部
+        let clipView = outline.enclosingScrollView?.contentView
+        let savedScrollOrigin = clipView?.bounds.origin
+
         let previousURL = currentURL ?? currentURLProvider?() ?? selectedNode()?.url
         let previousTag = selectedNode()?.tag
+        let previousWasAllTags = (selectedNode()?.kind == .allTags)
 
         let wasRestoring = isRestoringSelection
         isRestoringSelection = true
@@ -663,6 +732,8 @@ final class SidebarView: NSView {
                                                  tag: tag.name,
                                                  dotColor: tag.color))
             }
+            // 对齐访达侧栏底部「所有标签…」入口
+            tags.children.append(SidebarNode(kind: .allTags, title: "所有标签…"))
             list.append(tags)
         }
 
@@ -671,12 +742,27 @@ final class SidebarView: NSView {
         outline.reloadData()
         for node in nodes { outline.expandItem(node) }
 
-        if let tag = previousTag {
-            select(tag: tag)
+        if previousWasAllTags {
+            selectAllTagsRow(scrollToVisible: false)
+        } else if let tag = previousTag {
+            select(tag: tag, scrollToVisible: false)
         } else if let url = previousURL {
-            select(url: url)
+            select(url: url, scrollToVisible: false)
         } else {
             outline.deselectAll(nil)
+        }
+
+        // 精准恢复原本的滚动位置
+        if let savedScrollOrigin, let clipView = outline.enclosingScrollView?.contentView {
+            clipView.scroll(to: savedScrollOrigin)
+            outline.enclosingScrollView?.reflectScrolledClipView(clipView)
+
+            // 再次在下一次 Runloop 校验确认，防止 NSOutlineView 布局重排后将滚动条重置
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let clip = self.outline.enclosingScrollView?.contentView else { return }
+                clip.scroll(to: savedScrollOrigin)
+                self.outline.enclosingScrollView?.reflectScrolledClipView(clip)
+            }
         }
     }
 
@@ -736,7 +822,8 @@ final class SidebarView: NSView {
 
     // MARK: - 选中同步
 
-    func select(url: URL) {
+    func select(url: URL, scrollToVisible: Bool = true) {
+        activeAllTagsSelection = nil
         let wasRestoring = isRestoringSelection
         isRestoringSelection = true
         defer { isRestoringSelection = wasRestoring }
@@ -750,7 +837,9 @@ final class SidebarView: NSView {
                     let row = outline.row(forItem: child)
                     if row >= 0 {
                         outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                        outline.scrollRowToVisible(row)
+                        if scrollToVisible {
+                            outline.scrollRowToVisible(row)
+                        }
                     }
                     return
                 }
@@ -759,8 +848,9 @@ final class SidebarView: NSView {
         outline.deselectAll(nil)
     }
 
-    /// 让某个标签行成为选中项（切换窗格焦点时用）。
-    func select(tag: String) {
+    /// 让某个标签行成为选中项（切换窗格焦点时用）。若该标签不在边栏中（例如「123」），则高亮选中「所有标签…」行。
+    func select(tag: String, scrollToVisible: Bool = true) {
+        activeAllTagsSelection = tag
         let wasRestoring = isRestoringSelection
         isRestoringSelection = true
         defer { isRestoringSelection = wasRestoring }
@@ -770,7 +860,32 @@ final class SidebarView: NSView {
                 let row = outline.row(forItem: child)
                 if row >= 0 {
                     outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                    outline.scrollRowToVisible(row)
+                    if scrollToVisible {
+                        outline.scrollRowToVisible(row)
+                    }
+                }
+                return
+            }
+        }
+
+        // 若该标签属于「所有标签…」里的额外标签（如 "123"），高亮「所有标签…」行
+        selectAllTagsRow(scrollToVisible: scrollToVisible)
+    }
+
+    /// 选中侧栏底部的「所有标签…」行
+    func selectAllTagsRow(scrollToVisible: Bool = true) {
+        let wasRestoring = isRestoringSelection
+        isRestoringSelection = true
+        defer { isRestoringSelection = wasRestoring }
+
+        for node in nodes {
+            for child in node.children where child.kind == .allTags {
+                let row = outline.row(forItem: child)
+                if row >= 0 {
+                    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                    if scrollToVisible {
+                        outline.scrollRowToVisible(row)
+                    }
                 }
                 return
             }
@@ -784,6 +899,11 @@ final class SidebarView: NSView {
         let row = outline.clickedRow
         guard row >= 0, let node = outline.item(atRow: row) as? SidebarNode else {
             outline.deselectAll(nil)
+            return
+        }
+        if node.kind == .allTags {
+            selectAllTagsRow(scrollToVisible: false)
+            onSelectAllTags?()
             return
         }
         open(node)
@@ -803,12 +923,23 @@ final class SidebarView: NSView {
                 onRequestConnectServer?(nil)
             }
         case .tag:
-            if let tag = node.tag { onSelectTag?(tag) }
+            if let tag = node.tag {
+                activeAllTagsSelection = tag
+                onSelectTag?(tag)
+            }
+        case .allTags:
+            selectAllTagsRow(scrollToVisible: false)
+            onSelectAllTags?()
         case .folder:
             if let url = node.url { onSelect?(url) }
         case .group:
             break
         }
+    }
+
+    @objc private func showAllTagsFromMenuClicked() {
+        selectAllTagsRow(scrollToVisible: true)
+        onSelectAllTags?()
     }
 
     @objc private func toggleCategoryClicked(_ sender: NSMenuItem) {
@@ -968,8 +1099,34 @@ final class SidebarView: NSView {
 
     @objc private func renameTagClicked(_ sender: NSMenuItem) {
         guard let tagName = sender.representedObject as? String ?? contextNode?.tag ?? contextNode?.title else { return }
-        select(tag: tagName)
-        startRenamingSelectedTag()
+        promptRenameTag(named: tagName)
+    }
+
+    private func promptRenameTag(named tagName: String) {
+        if Tags.isTagInSidebar(named: tagName) {
+            select(tag: tagName)
+            startRenamingSelectedTag()
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "给“\(tagName)”重新命名"
+            let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+            input.stringValue = tagName
+            alert.accessoryView = input
+            alert.addButton(withTitle: "好")
+            alert.addButton(withTitle: "取消")
+            if alert.runModal() == .alertFirstButtonReturn {
+                let newName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !newName.isEmpty && newName != tagName {
+                    let wasShowing = isShowingTag?(tagName) ?? false
+                    Tags.renameTag(oldName: tagName, newName: newName)
+                    reload()
+                    if wasShowing {
+                        onSelectTag?(newName)
+                    }
+                    select(tag: newName)
+                }
+            }
+        }
     }
 
     @objc private func openInOtherPaneClicked(_ sender: NSMenuItem) {
@@ -1087,17 +1244,104 @@ final class SidebarView: NSView {
         }
     }
 
+    private func makePaletteIcon(color: NSColor?) -> NSImage {
+        Tags.paletteIcon(color: color, diameter: 14)
+    }
+
+    @objc private func hideTagFromSidebarClicked(_ sender: NSMenuItem) {
+        guard let tagName = (sender.representedObject as? String) ?? contextNode?.tag ?? contextNode?.title else { return }
+        if selectedNode()?.tag == tagName {
+            outline.deselectAll(nil)
+        }
+        Tags.hideTagFromSidebar(named: tagName)
+        onTagRemoved?(tagName)
+        reload()
+    }
+
+    @objc private func colorPickedForTag(_ sender: NSMenuItem) {
+        guard let tuple = sender.representedObject as? (tagName: String, colorKey: String) else { return }
+        Tags.updateTagColor(named: tuple.tagName, colorKey: tuple.colorKey)
+        reload()
+    }
+
     @objc private func deleteTagClicked(_ sender: NSMenuItem) {
         guard let tagName = (sender.representedObject as? String) ?? contextNode?.tag ?? contextNode?.title else { return }
-        let alert = NSAlert()
-        alert.messageText = "移除标签"
-        alert.informativeText = "确定要从列表中移除标签“\(tagName)”吗？"
-        alert.addButton(withTitle: "移除")
-        alert.addButton(withTitle: "取消")
-        if alert.runModal() == .alertFirstButtonReturn {
-            Tags.removeTag(named: tagName)
-            reload()
+        confirmAndDeleteTag(named: tagName)
+    }
+
+    func confirmAndDeleteTag(named tagName: String) {
+        let paneURLs = getURLsForTagInPanes?(tagName) ?? []
+        var affectedSet = Set(paneURLs)
+        for url in Tags.findURLs(tagged: tagName) {
+            affectedSet.insert(url)
         }
+        let itemCount = affectedSet.count
+
+        let executeDeletion = { [weak self] in
+            guard let self else { return }
+            let wasShowing = (self.isShowingTag?(tagName) ?? false)
+                || (self.selectedNode()?.tag == tagName)
+                || (self.activeAllTagsSelection == tagName)
+            if self.activeAllTagsSelection == tagName {
+                self.activeAllTagsSelection = nil
+            }
+            if self.selectedNode()?.tag == tagName {
+                self.outline.deselectAll(nil)
+            }
+            if let result = Tags.removeTag(named: tagName, extraURLs: Array(affectedSet)) {
+                let record = TagDeletionRecord(
+                    tagDef: result.definition,
+                    originalIndex: result.index,
+                    affectedURLs: result.affectedURLs,
+                    wasShowingInPane: wasShowing
+                )
+                self.tagUndoStack.append(record)
+            }
+            self.onTagRemoved?(tagName)
+            NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+            self.reload()
+        }
+
+        if let win = self.window {
+            FinderTagDeleteOverlay.present(
+                in: win,
+                tagName: tagName,
+                itemCount: itemCount,
+                onConfirm: executeDeletion
+            )
+        } else {
+            executeDeletion()
+        }
+    }
+
+    /// 撤销刚刚删除的标签并恢复所有被标记的文件/文件夹
+    @discardableResult
+    func undoTagDeletion() -> Bool {
+        guard let record = tagUndoStack.popLast() else { return false }
+        Tags.restoreTag(record.tagDef, at: record.originalIndex)
+        for url in record.affectedURLs {
+            Tags.addTag(tag: record.tagDef.name, to: url)
+        }
+        NotificationCenter.default.post(name: .filesDidChangeOnDisk, object: nil)
+        NotificationCenter.default.post(name: .tagsDidChange, object: nil)
+        reload()
+        select(tag: record.tagDef.name)
+        if record.wasShowingInPane {
+            onSelectTag?(record.tagDef.name)
+        }
+        return true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let chars = event.charactersIgnoringModifiers?.lowercased()
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isUndo = (flags == .control || flags == .command) && chars == "z"
+        if isUndo {
+            if undoTagDeletion() {
+                return
+            }
+        }
+        super.keyDown(with: event)
     }
 
     private func selectedNode() -> SidebarNode? {
@@ -1112,17 +1356,14 @@ final class SidebarView: NSView {
 /// 侧栏列表：右键时按被点中的节点动态生成菜单（点空白区域同样弹出侧栏操作菜单）。
 final class SidebarOutlineView: NSOutlineView {
     var menuProvider: ((SidebarNode?) -> NSMenu?)?
+    var onUndo: (() -> Bool)?
     private var trackingArea: NSTrackingArea?
 
     var hoveredRow: Int = -1 {
         didSet {
-            if oldValue != hoveredRow {
-                if oldValue >= 0 && oldValue < numberOfRows {
-                    rowView(atRow: oldValue, makeIfNecessary: false)?.needsDisplay = true
-                }
-                if hoveredRow >= 0 && hoveredRow < numberOfRows {
-                    rowView(atRow: hoveredRow, makeIfNecessary: false)?.needsDisplay = true
-                }
+            guard oldValue != hoveredRow else { return }
+            enumerateAvailableRowViews { rowView, _ in
+                rowView.needsDisplay = true
             }
         }
     }
@@ -1144,7 +1385,7 @@ final class SidebarOutlineView: NSOutlineView {
         super.mouseMoved(with: event)
         let p = convert(event.locationInWindow, from: nil)
         let row = self.row(at: p)
-        if row >= 0, let node = item(atRow: row) as? SidebarNode, !node.isGroup {
+        if row >= 0, visibleRect.contains(p), let node = item(atRow: row) as? SidebarNode, !node.isGroup {
             hoveredRow = row
         } else {
             hoveredRow = -1
@@ -1156,19 +1397,66 @@ final class SidebarOutlineView: NSOutlineView {
         hoveredRow = -1
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        let p = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: p)
+        if row >= 0, visibleRect.contains(p), let node = item(atRow: row) as? SidebarNode, !node.isGroup {
+            hoveredRow = row
+        } else {
+            hoveredRow = -1
+        }
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func selectRowIndexes(_ indexes: IndexSet, byExtendingSelection extend: Bool) {
+        super.selectRowIndexes(indexes, byExtendingSelection: extend)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func deselectAll(_ sender: Any?) {
+        super.deselectAll(sender)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func deselectRow(_ row: Int) {
+        super.deselectRow(row)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
     override func reloadData() {
         hoveredRow = -1
         super.reloadData()
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
+        hoveredRow = -1
         let node = row >= 0 ? (item(atRow: row) as? SidebarNode) : nil
         return menuProvider?(node) ?? super.menu(for: event)
     }
 
     override func keyDown(with event: NSEvent) {
+        let chars = event.charactersIgnoringModifiers?.lowercased()
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isUndo = (flags == .control || flags == .command) && chars == "z"
+        if isUndo {
+            if onUndo?() == true {
+                return
+            }
+        }
         if event.keyCode == 36 || event.characters == "\r" {
             if selectedRow >= 0, let node = item(atRow: selectedRow) as? SidebarNode, node.kind == .tag {
                 if let sidebar = delegate as? SidebarView {
@@ -1256,6 +1544,7 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !isRestoringSelection else { return }
         guard let node = selectedNode() else { return }
+        if node.kind == .allTags { return }
         open(node)
     }
 
@@ -1310,10 +1599,48 @@ private final class SidebarGroupRowView: NSTableRowView {
     }
 }
 
+// MARK: - 侧栏标签分组专用的「+」添加按钮（颜色与折叠箭头一致，纯净点击变深反馈）
+
+private final class SidebarPlusButton: NSButton {
+
+    override var isHighlighted: Bool {
+        didSet { updateAppearance() }
+    }
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 14, height: 14))
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setup() {
+        bezelStyle = .regularSquare
+        isBordered = false
+        title = ""
+        image = Theme.symbol("plus", size: 9, weight: .medium)
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        toolTip = "添加标签"
+        updateAppearance()
+    }
+
+    private func updateAppearance() {
+        // 与系统折叠箭头保持一致：平时颜色淡灰（.tertiaryLabelColor），按下时变深（.labelColor）
+        contentTintColor = isHighlighted ? .labelColor : .tertiaryLabelColor
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
 // MARK: - 单元格
 
 private final class SidebarGroupCell: NSTableCellView {
-    let plusButton = NSButton()
+    let plusButton = SidebarPlusButton()
     var onAddTag: (() -> Void)?
 
     init(identifier: NSUserInterfaceItemIdentifier) {
@@ -1327,11 +1654,6 @@ private final class SidebarGroupCell: NSTableCellView {
         textField = field
 
         plusButton.translatesAutoresizingMaskIntoConstraints = false
-        plusButton.bezelStyle = .regularSquare
-        plusButton.isBordered = false
-        plusButton.image = Theme.symbol("plus", size: 9.5, weight: .semibold)
-        plusButton.contentTintColor = .secondaryLabelColor
-        plusButton.toolTip = "添加标签"
         plusButton.target = self
         plusButton.action = #selector(plusButtonClicked)
         plusButton.isHidden = true
@@ -1343,8 +1665,8 @@ private final class SidebarGroupCell: NSTableCellView {
 
             plusButton.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 4),
             plusButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
-            plusButton.widthAnchor.constraint(equalToConstant: 16),
-            plusButton.heightAnchor.constraint(equalToConstant: 16)
+            plusButton.widthAnchor.constraint(equalToConstant: 14),
+            plusButton.heightAnchor.constraint(equalToConstant: 14)
         ])
     }
 
@@ -1616,6 +1938,13 @@ private final class SidebarItemCell: NSTableCellView, NSTextFieldDelegate {
             icon.image = Theme.symbol("plus.circle", size: 13, weight: .medium)
             icon.contentTintColor = .secondaryLabelColor
             title.textColor = .secondaryLabelColor
+            return
+        }
+
+        if node.kind == .allTags {
+            icon.image = Tags.allTagsIcon()
+            icon.contentTintColor = nil
+            title.textColor = .labelColor
             return
         }
 

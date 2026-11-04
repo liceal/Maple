@@ -374,6 +374,10 @@ final class FileListView: NSView {
         scroll.onSwipeBegin = { [weak self] in
             self?.handleSwipeBegin()
         }
+        scroll.canSwipe = { [weak self] in
+            guard let self else { return false }
+            return (self.canSwipeBack?() ?? false) || (self.canSwipeForward?() ?? false)
+        }
         scroll.onSwipeChange = { [weak self] totalFingerDX in
             self?.handleSwipeChange(totalFingerDX: totalFingerDX)
         }
@@ -449,6 +453,11 @@ final class FileListView: NSView {
     private func handleSwipeChange(totalFingerDX: CGFloat) {
         let canBack = canSwipeBack?() ?? false
         let canFwd = canSwipeForward?() ?? false
+        guard canBack || canFwd else {
+            swipeBadge.isHidden = true
+            swipeBadge.alphaValue = 0
+            return
+        }
         let isBack = (totalFingerDX >= 0) ? true : (!canFwd && canBack)
         let isRightSlide = (totalFingerDX >= 0)
         let allowed = isBack ? canBack : canFwd
@@ -1126,6 +1135,27 @@ final class KeyTableView: NSTableView {
         }
     }
 
+    override func deselectAll(_ sender: Any?) {
+        super.deselectAll(sender)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func deselectRow(_ row: Int) {
+        super.deselectRow(row)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func reloadData() {
+        super.reloadData()
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         pendingRenameWorkItem?.cancel()
         pendingRenameWorkItem = nil
@@ -1157,13 +1187,6 @@ final class KeyTableView: NSTableView {
         dragStartRow = row
         dragInitialSelection = selectedRowIndexes
 
-        // 点击空白处且未按 ⌘ / ⇧：与访达一致清空选中
-        if row < 0 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
-            if !selectedRowIndexes.isEmpty {
-                deselectAll(nil)
-            }
-        }
-
         // 双击或多击：交由 doubleAction 打开文件
         if event.clickCount >= 2 {
             didClickOnMultiSelection = false
@@ -1171,24 +1194,48 @@ final class KeyTableView: NSTableView {
             return
         }
 
+        window?.makeFirstResponder(self)
+
+        // 点击空白处：与访达一致清空选中并直接返回，防止触发系统内置划选导致多行意外变灰选中
+        guard row >= 0 else {
+            if !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+                if !selectedRowIndexes.isEmpty {
+                    deselectAll(nil)
+                }
+            }
+            didClickOnMultiSelection = false
+            return
+        }
+
         // 判断该项在点击前是否已被单独选中，并且点击在文件名文本区域
-        let wasAlreadySingleSelected = (row >= 0 && selectedRowIndexes.count == 1 && selectedRowIndexes.contains(row))
+        let wasAlreadySingleSelected = (selectedRowIndexes.count == 1 && selectedRowIndexes.contains(row))
         let hitName = isPointInName?(row, point) ?? true
 
         if wasAlreadySingleSelected && hitName && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
             potentialRenameRow = row
         }
 
-        // 如果用户在已多选的多个项目中点击了其中某一项，且未按 ⌘ / ⇧：
-        // 延迟至鼠标抬起时再单选它，以便在拖拽时能完整带出所有选中的文件
-        if row >= 0 && selectedRowIndexes.contains(row) && selectedRowIndexes.count > 1 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+        if event.modifierFlags.contains(.command) {
+            didClickOnMultiSelection = false
+            if selectedRowIndexes.contains(row) {
+                deselectRow(row)
+            } else {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: true)
+            }
+        } else if event.modifierFlags.contains(.shift) && allowsMultipleSelection {
+            didClickOnMultiSelection = false
+            let anchor = selectedRow >= 0 ? selectedRow : row
+            let range = IndexSet(integersIn: min(anchor, row)...max(anchor, row))
+            selectRowIndexes(range, byExtendingSelection: false)
+        } else if selectedRowIndexes.contains(row) && selectedRowIndexes.count > 1 {
+            // 在已多选的多个项目中点击了其中某一项：延迟至鼠标抬起时再单选它，以便拖拽时完整带出所有选中文件
             didClickOnMultiSelection = true
         } else if wasAlreadySingleSelected {
             // 已被单独选中的项再次单击：保留选中，使后续 mouseUp 能准确收到事件并触发重命名
-            window?.makeFirstResponder(self)
+            didClickOnMultiSelection = false
         } else {
             didClickOnMultiSelection = false
-            super.mouseDown(with: event)
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
 
@@ -1208,7 +1255,7 @@ final class KeyTableView: NSTableView {
 
         guard mouseDidDrag else { return }
 
-        // 1. 若拖拽起始于某一行且鼠标位移超过 3pt：启动文件拖拽！
+        // 若拖拽起始于某一行且鼠标位移超过 3pt：启动文件拖拽（不触发多行划选，避免鼠标移动导致多行意外选中）
         if let start = dragStartRow, start >= 0 {
             let targetRows: IndexSet
             if selectedRowIndexes.contains(start) {
@@ -1230,45 +1277,6 @@ final class KeyTableView: NSTableView {
                 return
             }
         }
-
-        guard allowsMultipleSelection, numberOfRows > 0, dragStartRow != nil, dragStartRow! >= 0 else {
-            super.mouseDragged(with: event)
-            return
-        }
-
-        let point = convert(event.locationInWindow, from: nil)
-        var cur = row(at: point)
-        if cur < 0 {
-            if point.y < 0 {
-                cur = 0
-            } else if point.y >= bounds.height {
-                cur = numberOfRows - 1
-            } else {
-                for r in 0..<numberOfRows {
-                    if point.y < rect(ofRow: r).maxY {
-                        cur = r
-                        break
-                    }
-                }
-                if cur < 0 { cur = numberOfRows - 1 }
-            }
-        }
-
-        guard let start = dragStartRow, start >= 0, cur >= 0 else {
-            super.mouseDragged(with: event)
-            return
-        }
-
-        let r1 = min(start, cur)
-        let r2 = max(start, cur)
-        let range = IndexSet(integersIn: r1...r2)
-
-        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.shift) {
-            selectRowIndexes(dragInitialSelection.union(range), byExtendingSelection: false)
-        } else {
-            selectRowIndexes(range, byExtendingSelection: false)
-        }
-        autoscroll(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -1460,6 +1468,27 @@ final class KeyOutlineView: NSOutlineView {
         }
     }
 
+    override func deselectAll(_ sender: Any?) {
+        super.deselectAll(sender)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func deselectRow(_ row: Int) {
+        super.deselectRow(row)
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
+    override func reloadData() {
+        super.reloadData()
+        enumerateAvailableRowViews { rowView, _ in
+            rowView.needsDisplay = true
+        }
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         pendingRenameWorkItem?.cancel()
         pendingRenameWorkItem = nil
@@ -1491,11 +1520,15 @@ final class KeyOutlineView: NSOutlineView {
         dragStartRow = row
         dragInitialSelection = selectedRowIndexes
 
-        // 点击空白处且未按 ⌘ / ⇧：与访达一致清空选中
-        if row < 0 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
-            if !selectedRowIndexes.isEmpty {
-                deselectAll(nil)
-            }
+        // 排除展开三角与分组行
+        let arrowFrame = frameOfOutlineCell(atRow: row)
+        let clickedArrow = (arrowFrame.width > 0 && point.x <= arrowFrame.maxX + 4)
+        let isGroup = (row >= 0 && item(atRow: row) is FileListView.GroupNode)
+
+        if clickedArrow {
+            didClickOnMultiSelection = false
+            super.mouseDown(with: event)
+            return
         }
 
         // 双击或多击：交由 doubleAction 打开文件
@@ -1505,29 +1538,51 @@ final class KeyOutlineView: NSOutlineView {
             return
         }
 
-        // 排除展开三角与分组行
-        let arrowFrame = frameOfOutlineCell(atRow: row)
-        let clickedArrow = (arrowFrame.width > 0 && point.x <= arrowFrame.maxX + 4)
-        let isGroup = (row >= 0 && item(atRow: row) is FileListView.GroupNode)
+        window?.makeFirstResponder(self)
+
+        // 点击空白处或分组标题行：不进入系统内置划选循环，防止移动鼠标时多行被意外划选变灰
+        guard row >= 0, !isGroup else {
+            if row < 0 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+                if !selectedRowIndexes.isEmpty {
+                    deselectAll(nil)
+                }
+            }
+            didClickOnMultiSelection = false
+            return
+        }
 
         // 判断该项在点击前是否已被单独选中，并且点击在文件名文本区域
-        let wasAlreadySingleSelected = (row >= 0 && !isGroup && !clickedArrow && selectedRowIndexes.count == 1 && selectedRowIndexes.contains(row))
+        let wasAlreadySingleSelected = (selectedRowIndexes.count == 1 && selectedRowIndexes.contains(row))
         let hitName = isPointInName?(row, point) ?? true
 
         if wasAlreadySingleSelected && hitName && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
             potentialRenameRow = row
         }
 
-        // 如果用户在已多选的多个项目中点击了其中某一项，且未按 ⌘ / ⇧：
-        // 延迟至鼠标抬起时再单选它，以便在拖拽时能完整带出所有选中的文件
-        if row >= 0 && !isGroup && !clickedArrow && selectedRowIndexes.contains(row) && selectedRowIndexes.count > 1 && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+        if event.modifierFlags.contains(.command) {
+            didClickOnMultiSelection = false
+            if selectedRowIndexes.contains(row) {
+                deselectRow(row)
+            } else {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: true)
+            }
+        } else if event.modifierFlags.contains(.shift) && allowsMultipleSelection {
+            didClickOnMultiSelection = false
+            let anchor = selectedRow >= 0 ? selectedRow : row
+            let r1 = min(anchor, row)
+            let r2 = max(anchor, row)
+            let validRows = (r1...r2).filter { !(self.item(atRow: $0) is FileListView.GroupNode) }
+            selectRowIndexes(IndexSet(validRows), byExtendingSelection: false)
+        } else if selectedRowIndexes.contains(row) && selectedRowIndexes.count > 1 {
+            // 如果用户在已多选的多个项目中点击了其中某一项，且未按 ⌘ / ⇧：
+            // 延迟至鼠标抬起时再单选它，以便在拖拽时能完整带出所有选中的文件
             didClickOnMultiSelection = true
         } else if wasAlreadySingleSelected {
             // 已被单独选中的项再次单击：保留选中，使后续 mouseUp 能准确收到事件并触发重命名
-            window?.makeFirstResponder(self)
+            didClickOnMultiSelection = false
         } else {
             didClickOnMultiSelection = false
-            super.mouseDown(with: event)
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
 
@@ -1547,7 +1602,7 @@ final class KeyOutlineView: NSOutlineView {
 
         guard mouseDidDrag else { return }
 
-        // 1. 若拖拽起始于某一文件行且鼠标位移超过 3pt：启动文件拖拽！
+        // 若拖拽起始于某一文件行且鼠标位移超过 3pt：启动文件拖拽（不触发多行划选，避免鼠标移动导致多行意外选中）
         if let start = dragStartRow, start >= 0 {
             if !(item(atRow: start) is FileListView.GroupNode) {
                 let targetRows: IndexSet
@@ -1571,45 +1626,6 @@ final class KeyOutlineView: NSOutlineView {
                 }
             }
         }
-
-        guard allowsMultipleSelection, numberOfRows > 0, dragStartRow != nil, dragStartRow! >= 0 else {
-            super.mouseDragged(with: event)
-            return
-        }
-
-        let point = convert(event.locationInWindow, from: nil)
-        var cur = row(at: point)
-        if cur < 0 {
-            if point.y < 0 {
-                cur = 0
-            } else if point.y >= bounds.height {
-                cur = numberOfRows - 1
-            } else {
-                for r in 0..<numberOfRows {
-                    if point.y < rect(ofRow: r).maxY {
-                        cur = r
-                        break
-                    }
-                }
-                if cur < 0 { cur = numberOfRows - 1 }
-            }
-        }
-
-        guard let start = dragStartRow, start >= 0, cur >= 0 else {
-            super.mouseDragged(with: event)
-            return
-        }
-
-        let r1 = min(start, cur)
-        let r2 = max(start, cur)
-        let range = IndexSet(integersIn: r1...r2)
-
-        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.shift) {
-            selectRowIndexes(dragInitialSelection.union(range), byExtendingSelection: false)
-        } else {
-            selectRowIndexes(range, byExtendingSelection: false)
-        }
-        autoscroll(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -2007,6 +2023,7 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         let dx = convert(NSPoint.zero, to: owner).x
         let nameRight = (owner?.columnLayout.nameRect.maxX ?? 300) - dx
         if local.x > nameRight { return false }
+        if !tagDotsView.isHidden && local.x > tagDotsView.frame.minX - 4 { return false }
         return true
     }
 
@@ -2153,7 +2170,8 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         let nameRight = layout.nameRect.maxX - 8
         let textHeight: CGFloat = isInlineEditing ? max(21, iconSize + 4) : 17
         let nameX = nameTextX - (isInlineEditing ? 3 : 0)
-        let maxAvailableWidth = max(50, nameRight - nameTextX - dx + (isInlineEditing ? 3 : 0))
+        let localNameRight = nameRight - dx
+        let maxAvailableWidth = max(50, localNameRight - nameX + (isInlineEditing ? 3 : 0))
 
         let titleWidth: CGFloat
         if isInlineEditing {
@@ -2165,17 +2183,16 @@ private final class FileRowCell: NSTableCellView, NSTextFieldDelegate {
         } else {
             let tagCount = item?.tags.count ?? 0
             if tagCount > 0 {
-                let font = title.font ?? .systemFont(ofSize: 12.5)
-                let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
                 let dotsW = TagDotsView.preferredWidth(count: tagCount)
-                let maxTextW = max(20, maxAvailableWidth - dotsW - 6)
-                titleWidth = min(maxTextW, ceil(textW) + 2)
+                let tagX = localNameRight - dotsW
                 tagDotsView.isHidden = false
-                tagDotsView.frame = NSRect(x: nameX + titleWidth + 5,
+                tagDotsView.frame = NSRect(x: tagX,
                                            y: (rowHeight - 12) / 2,
                                            width: dotsW, height: 12)
+                let titleRight = tagX - 6
+                titleWidth = max(20, titleRight - nameX)
             } else {
-                titleWidth = max(0, nameRight - nameTextX - dx)
+                titleWidth = max(0, localNameRight - nameX)
                 tagDotsView.isHidden = true
             }
         }

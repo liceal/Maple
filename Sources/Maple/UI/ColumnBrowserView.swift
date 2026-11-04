@@ -55,6 +55,7 @@ final class ColumnBrowserView: NSView {
     private var dragStartPreviewWidth: CGFloat = 214
 
     private(set) var rootURL = URL(fileURLWithPath: NSHomeDirectory())
+    private var customRootItems: [FileItem]?
     private var sortField: SortField = .name
     private var ascending = true
 
@@ -248,7 +249,9 @@ final class ColumnBrowserView: NSView {
 
     /// 由窗格调用：根目录或排序发生变化时刷新。
     func refresh(root: URL, sort: SortField, ascending: Bool) {
-        let rootChanged = root.standardizedFileURL != rootURL.standardizedFileURL
+        let wasCustom = (customRootItems != nil)
+        customRootItems = nil
+        let rootChanged = wasCustom || (root.standardizedFileURL != rootURL.standardizedFileURL)
         rootURL = root
         sortField = sort
         self.ascending = ascending
@@ -260,8 +263,35 @@ final class ColumnBrowserView: NSView {
         }
     }
 
+    /// 标签视图下按指定文件列表展示分栏（首列直接展示标签下的项目，若无项目则为空，不读取 rootURL 磁盘目录）
+    func refreshWithCustomItems(_ items: [FileItem], sort: SortField, ascending: Bool) {
+        customRootItems = items
+        sortField = sort
+        self.ascending = ascending
+        removeColumns(from: 0)
+        clearPreview()
+        if !items.isEmpty {
+            let first = makeColumn(url: rootURL, index: 0)
+            first.customItems = items
+            first.reload(showHidden: AppSettings.showHidden, sort: sortField, ascending: ascending)
+            columns = [first]
+            board.addSubview(first)
+        } else {
+            columns = []
+        }
+        activeColumn = 0
+        currentItem = nil
+        if isPreviewEnabled {
+            syncPreview(items: [], scrollToVisible: false)
+        }
+        layoutColumns()
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
     /// 重置为「只有一列」的状态，并选中 url（若在根目录内）。
     func setRoot(_ url: URL, selecting target: URL? = nil) {
+        customRootItems = nil
         rootURL = url
         rebuild()
         if let target { select(urls: [target]) }
@@ -949,13 +979,14 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
     // MARK: - 数据
 
     private var isReloading = false
+    var customItems: [FileItem]?
 
     func reload(showHidden: Bool, sort: SortField, ascending: Bool, restoring keep: URL? = nil) {
         isReloading = true
         defer { isReloading = false }
 
         let oldSelectedRow = table.selectedRow
-        let raw = FileItem.contents(of: url, showHidden: showHidden)
+        let raw = customItems ?? FileItem.contents(of: url, showHidden: showHidden)
         items = FileOrganizer.sections(items: raw, sort: sort, ascending: ascending, group: .none)
             .flatMap { $0.items }
         table.reloadData()
@@ -1145,6 +1176,23 @@ final class BrowserColumn: NSView, NSTableViewDataSource, NSTableViewDelegate {
 /// - 单项选中：四角全圆角 (radius 5.5)
 /// - 连续多选：首行顶角圆角、末行底角圆角、中间行无缝平滑拼接
 class ColumnTableRowView: NSTableRowView {
+
+    override var isSelected: Bool {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    override var isEmphasized: Bool {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        needsDisplay = true
+    }
 
     override func drawBackground(in dirtyRect: NSRect) {
         let baseColor = NSColor.controlBackgroundColor
@@ -1341,6 +1389,7 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         guard local.y >= 0 && local.y <= bounds.height else { return false }
         if local.x < 25 { return false }
         if !chevron.isHidden && local.x > chevron.frame.minX - 4 { return false }
+        if !tagDotsView.isHidden && local.x > tagDotsView.frame.minX - 4 { return false }
         return true
     }
 
@@ -1504,40 +1553,49 @@ private final class ColumnRowCell: NSTableCellView, NSTextFieldDelegate {
         }
         let cellW = min(bounds.width, visibleW)
 
-        let chevronWidth: CGFloat = chevron.isHidden ? 0 : 13
-        chevron.frame = NSRect(x: cellW - 14 - chevronWidth, y: (height - 12) / 2,
-                               width: chevronWidth, height: 12)
+        let rightMargin: CGFloat = 14
+        let chevronWidth: CGFloat = 13
+        let chevronGap: CGFloat = 6
+
+        // 箭头放置在最右侧（右边距 14）
+        chevron.frame = NSRect(x: cellW - rightMargin - chevronWidth,
+                               y: (height - 12) / 2,
+                               width: chevronWidth,
+                               height: 12)
+
+        // 无论当前是文件夹还是文件，标签都以「箭头的左侧位置」为统一右边界基准
+        // 从而保证普通文件右侧预留出箭头空间，在垂直视觉上与文件夹标签完全对齐
+        let tagRightAnchor = cellW - rightMargin - chevronWidth - chevronGap
 
         let textHeight: CGFloat = isInlineEditing ? 21 : 17
         let nameX = icon.frame.maxX + 7 - (isInlineEditing ? 3 : 0)
-        let nameRight = chevron.isHidden ? cellW - 12 : chevron.frame.minX - 4
-        let maxAvailableW = max(50, nameRight - nameX)
 
-        let titleWidth: CGFloat
         if isInlineEditing {
+            let maxRight = chevron.isHidden ? (cellW - rightMargin) : (chevron.frame.minX - 4)
+            let maxAvailableW = max(50, maxRight - nameX)
             let font = title.font ?? .systemFont(ofSize: 12.5)
             let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
-            titleWidth = min(maxAvailableW, max(50, ceil(textW) + 18))
+            let titleWidth = min(maxAvailableW, max(50, ceil(textW) + 18))
+            title.frame = NSRect(x: nameX, y: (height - textHeight) / 2, width: titleWidth, height: textHeight)
             tagDotsView.isHidden = true
         } else {
             let tagCount = currentItem?.tags.count ?? 0
             if tagCount > 0 {
-                let font = title.font ?? .systemFont(ofSize: 12.5)
-                let textW = (title.stringValue as NSString).size(withAttributes: [.font: font]).width
                 let dotsW = TagDotsView.preferredWidth(count: tagCount)
-                let maxTextW = max(20, maxAvailableW - dotsW - 6)
-                titleWidth = min(maxTextW, ceil(textW) + 2)
+                let tagX = tagRightAnchor - dotsW
                 tagDotsView.isHidden = false
-                tagDotsView.frame = NSRect(x: nameX + titleWidth + 5,
-                                           y: (height - 12) / 2,
-                                           width: dotsW, height: 12)
+                tagDotsView.frame = NSRect(x: tagX, y: (height - 12) / 2, width: dotsW, height: 12)
+
+                let titleRight = tagX - 6
+                let titleWidth = max(20, titleRight - nameX)
+                title.frame = NSRect(x: nameX, y: (height - textHeight) / 2, width: titleWidth, height: textHeight)
             } else {
-                titleWidth = max(0, nameRight - nameX)
                 tagDotsView.isHidden = true
+                let titleRight = chevron.isHidden ? (cellW - rightMargin) : (chevron.frame.minX - 6)
+                let titleWidth = max(20, titleRight - nameX)
+                title.frame = NSRect(x: nameX, y: (height - textHeight) / 2, width: titleWidth, height: textHeight)
             }
         }
-
-        title.frame = NSRect(x: nameX, y: (height - textHeight) / 2, width: titleWidth, height: textHeight)
     }
 
     func configure(with item: FileItem) {

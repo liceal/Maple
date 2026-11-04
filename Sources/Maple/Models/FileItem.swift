@@ -16,7 +16,7 @@ struct FileItem: Hashable {
     let tags: [String]
 
     var tagColors: [NSColor] {
-        tags.map { Tags.color(named: $0) }
+        tags.map { Tags.color(named: $0, on: url) }
     }
 
     /// 目录（且不是包）才可进入。包（.app 等）按 Finder 习惯当作文件打开。
@@ -31,8 +31,7 @@ struct FileItem: Hashable {
         .fileSizeKey,
         .contentModificationDateKey,
         .creationDateKey,
-        .localizedTypeDescriptionKey,
-        .tagNamesKey
+        .localizedTypeDescriptionKey
     ]
     static let resourceKeySet: Set<URLResourceKey> = Set(resourceKeys)
 
@@ -58,7 +57,11 @@ struct FileItem: Hashable {
         self.modified = values.contentModificationDate ?? .distantPast
         self.created = values.creationDate ?? .distantPast
         self.kind = values.localizedTypeDescription ?? ""
-        self.tags = values.tagNames ?? []
+        let resolvedTags = Tags.tags(for: url)
+        self.tags = resolvedTags
+        if !resolvedTags.isEmpty {
+            Tags.recordTrackedURL(url, hasTags: true, persist: false)
+        }
     }
 
     /// 零磁盘 I/O 快速构造（供高性能搜索引擎直接从内存索引/stat 快照生成 FileItem）。

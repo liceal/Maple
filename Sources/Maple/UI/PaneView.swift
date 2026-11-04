@@ -41,8 +41,8 @@ final class PaneView: NSView {
     var viewMode: ViewMode = .list {
         didSet {
             guard oldValue != viewMode else { return }
-            // 标签视图强制用列表展示，不覆盖用户原本的显示方式
-            if tagName == nil, !isRestoringViewMode { AppSettings.viewMode = viewMode.rawValue }
+            // 标签视图展示期间切换显示方式不覆盖用户原本的全局默认显示方式
+            if !isTagView, !isRestoringViewMode { AppSettings.viewMode = viewMode.rawValue }
             applyViewMode()
             delegate?.pane(self, didChangeViewMode: viewMode)
         }
@@ -83,8 +83,13 @@ final class PaneView: NSView {
     /// 标签视图：显示所有带该标签的项目（来自 Spotlight 的平铺列表）。
     private let tagSearch = TagSearch()
     private(set) var tagName: String?
+    private(set) var isAllTagsMode: Bool = false
     private var viewModeBeforeTag: ViewMode?
-    var isTagView: Bool { tagName != nil }
+    var isTagView: Bool { tagName != nil || isAllTagsMode }
+    /// 是否处于被清空未选中状态（例如所选标签被删除）
+    private(set) var isCleared: Bool = false
+    private var tagPopover: NSPopover?
+    var onRequestDeleteTag: ((String) -> Void)?
 
     // MARK: - 文件操作撤销与重做栈
     struct FileActionRecord {
@@ -131,12 +136,17 @@ final class PaneView: NSView {
     private let iconView = FileIconView()
     private let columnView = ColumnBrowserView()
 
-    // MARK: - 预览窗格
+    // MARK: - 预览窗格与「所有标签…」左列
+    private let allTagsColumn = AllTagsBrowserColumnView()
     private let listAndIconContainer = NSView()
     private let previewPane = FilePreviewPane()
     private let previewSplitter = SplitterView()
     private var previewWidthConstraint: NSLayoutConstraint?
     private var previewWidthAtDragStart: CGFloat = 260
+    private var listAndIconLeadingToContent: NSLayoutConstraint?
+    private var listAndIconLeadingToAllTagsColumn: NSLayoutConstraint?
+    private var columnLeadingToContent: NSLayoutConstraint?
+    private var columnLeadingToAllTagsColumn: NSLayoutConstraint?
     private var listAndIconTrailingToContent: NSLayoutConstraint?
     private var listAndIconTrailingToSplitter: NSLayoutConstraint?
 
@@ -285,12 +295,6 @@ final class PaneView: NSView {
         listAndIconContainer.addSubview(listView)
         listAndIconContainer.addSubview(iconView)
 
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        emptyLabel.font = .systemFont(ofSize: 12)
-        emptyLabel.textColor = .tertiaryLabelColor
-        emptyLabel.isHidden = true
-        listAndIconContainer.addSubview(emptyLabel)
-
         for view in [listView, iconView] {
             NSLayoutConstraint.activate([
                 view.topAnchor.constraint(equalTo: listAndIconContainer.topAnchor),
@@ -299,20 +303,30 @@ final class PaneView: NSView {
                 view.trailingAnchor.constraint(equalTo: listAndIconContainer.trailingAnchor)
             ])
         }
-        NSLayoutConstraint.activate([
-            emptyLabel.centerXAnchor.constraint(equalTo: listAndIconContainer.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: listAndIconContainer.centerYAnchor)
-        ])
 
         // 2. 分栏视图（独占整块窗格，自带内部多列与预览列）
         columnView.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(columnView)
 
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyLabel.font = .systemFont(ofSize: 12)
+        emptyLabel.textColor = .tertiaryLabelColor
+        emptyLabel.isHidden = true
+        content.addSubview(emptyLabel)
+
+        let colLeadingToContent = columnView.leadingAnchor.constraint(equalTo: content.leadingAnchor)
+        let colLeadingToAllTags = columnView.leadingAnchor.constraint(equalTo: allTagsColumn.trailingAnchor)
+        columnLeadingToContent = colLeadingToContent
+        columnLeadingToAllTagsColumn = colLeadingToAllTags
+
         NSLayoutConstraint.activate([
             columnView.topAnchor.constraint(equalTo: content.topAnchor),
             columnView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            columnView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            columnView.trailingAnchor.constraint(equalTo: content.trailingAnchor)
+            colLeadingToContent,
+            columnView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            emptyLabel.centerXAnchor.constraint(equalTo: listAndIconContainer.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: listAndIconContainer.centerYAnchor)
         ])
 
         // 3. 列表/图标模式下的右侧预览窗格与可拖动分割线
@@ -336,8 +350,17 @@ final class PaneView: NSView {
         previewPane.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(previewPane)
 
+        allTagsColumn.translatesAutoresizingMaskIntoConstraints = false
+        allTagsColumn.isHidden = true
+        content.addSubview(allTagsColumn)
+
         let widthConstraint = previewPane.widthAnchor.constraint(equalToConstant: AppSettings.previewPaneWidth)
         previewWidthConstraint = widthConstraint
+
+        let leadingToContent = listAndIconContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor)
+        let leadingToAllTags = listAndIconContainer.leadingAnchor.constraint(equalTo: allTagsColumn.trailingAnchor)
+        listAndIconLeadingToContent = leadingToContent
+        listAndIconLeadingToAllTagsColumn = leadingToAllTags
 
         let toContent = listAndIconContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor)
         let toSplitter = listAndIconContainer.trailingAnchor.constraint(equalTo: previewSplitter.leadingAnchor)
@@ -345,9 +368,14 @@ final class PaneView: NSView {
         listAndIconTrailingToSplitter = toSplitter
 
         NSLayoutConstraint.activate([
+            allTagsColumn.topAnchor.constraint(equalTo: content.topAnchor),
+            allTagsColumn.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            allTagsColumn.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            allTagsColumn.widthAnchor.constraint(equalToConstant: 145),
+
             listAndIconContainer.topAnchor.constraint(equalTo: content.topAnchor),
             listAndIconContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            listAndIconContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            leadingToContent,
             toContent,
 
             previewSplitter.topAnchor.constraint(equalTo: content.topAnchor),
@@ -482,7 +510,7 @@ final class PaneView: NSView {
         columnView.onSelectionChange = { [weak self] _ in self?.selectionChanged() }
         columnView.onActivate = { [weak self] in self?.activate() }
         columnView.onLocationChange = { [weak self] _, _ in
-            guard let self, self.viewMode == .columns else { return }
+            guard let self, self.viewMode == .columns, !self.isTagView else { return }
             self.refreshPathBar()
             self.updateNavigationButtons()
             // 分栏里换列也算「位置变了」，顶部标题要跟着更新
@@ -500,6 +528,37 @@ final class PaneView: NSView {
         }
         columnView.onDropFiles = { [weak self] urls, dest, isCopy in
             self?.handleDroppedFiles(urls, destinationDirectory: dest, isCopy: isCopy)
+        }
+
+        allTagsColumn.onActivate = { [weak self] in
+            self?.activate()
+        }
+        allTagsColumn.onSelectTag = { [weak self] name in
+            self?.selectTagInAllTagsBrowser(name)
+        }
+        allTagsColumn.onRequestDeleteTag = { [weak self] name in
+            self?.onRequestDeleteTag?(name)
+        }
+        allTagsColumn.onTagRenamed = { [weak self] oldName, newName in
+            guard let self else { return }
+            if self.tagName == oldName {
+                self.selectTagInAllTagsBrowser(newName)
+            }
+        }
+
+        NotificationCenter.default.addObserver(forName: .tagsDidChange, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            if self.isAllTagsMode {
+                self.allTagsColumn.reload(selecting: self.tagName, forceSpotlightRefresh: true)
+                if let currentSel = self.allTagsColumn.selectedTagName, currentSel != self.tagName {
+                    self.selectTagInAllTagsBrowser(currentSel)
+                    return
+                }
+            }
+            if let activeTag = self.tagName {
+                self.refreshPathBar()
+                self.runTagSearch(activeTag)
+            }
         }
 
         NotificationCenter.default.addObserver(forName: .filesDidChangeOnDisk, object: nil, queue: .main) { [weak self] _ in
@@ -549,9 +608,10 @@ final class PaneView: NSView {
     // MARK: - 数据加载
 
     func navigate(to url: URL, recordHistory: Bool = true) {
+        let wasTagOrCleared = isTagView || isCleared
         leaveTagMode()
         let target = url.standardizedFileURL
-        guard target.path != currentURL.standardizedFileURL.path || items.isEmpty else { return }
+        guard wasTagOrCleared || target.path != currentURL.standardizedFileURL.path || items.isEmpty else { return }
         // 历史由 refreshPathBar → applyPathBarLocation 统一记录，这里只负责切换目录
         if !recordHistory { suppressHistory = true }
         currentURL = target
@@ -561,6 +621,11 @@ final class PaneView: NSView {
     }
 
     func reload() {
+        if isCleared {
+            items = []
+            applyOrganization()
+            return
+        }
         if let tagName {
             emptyLabel.isHidden = false
             runTagSearch(tagName)
@@ -621,6 +686,11 @@ final class PaneView: NSView {
             pathBar.setBadge(title: tagName, color: Tags.color(named: tagName))
             return
         }
+        if isCleared || isAllTagsMode {
+            pathBar.clearBadge()
+            pathBar.setBlank()
+            return
+        }
         guard viewMode == .columns else {
             applyPathBarLocation(currentURL, trailing: nil)
             return
@@ -649,8 +719,67 @@ final class PaneView: NSView {
 
     // MARK: - 标签视图
 
+    private func syncAllTagsColumnVisibility() {
+        let showColumn = isAllTagsMode
+        allTagsColumn.isHidden = !showColumn
+        if showColumn {
+            listAndIconLeadingToContent?.isActive = false
+            listAndIconLeadingToAllTagsColumn?.isActive = true
+            columnLeadingToContent?.isActive = false
+            columnLeadingToAllTagsColumn?.isActive = true
+        } else {
+            listAndIconLeadingToAllTagsColumn?.isActive = false
+            listAndIconLeadingToContent?.isActive = true
+            columnLeadingToAllTagsColumn?.isActive = false
+            columnLeadingToContent?.isActive = true
+        }
+    }
+
+    /// 侧栏点击「所有标签…」：仿访达显示左侧全部标签分栏 + 右侧对应标签文件视图
+    func showAllTags(selecting initialTag: String? = nil) {
+        isCleared = false
+        if tagName == nil && !isAllTagsMode {
+            viewModeBeforeTag = viewMode
+        }
+        isAllTagsMode = true
+        if viewMode == .columns { viewMode = .list }
+        syncAllTagsColumnVisibility()
+        allTagsColumn.reload(selecting: initialTag ?? tagName, forceSpotlightRefresh: true)
+        if let selected = allTagsColumn.selectedTagName {
+            selectTagInAllTagsBrowser(selected)
+        } else {
+            tagName = nil
+            items = []
+            emptyLabel.stringValue = "暂无标签"
+            emptyLabel.isHidden = false
+            applyOrganization()
+            refreshPathBar()
+            updateNavigationButtons()
+            updateStatus()
+        }
+        activate()
+        allTagsColumn.focus()
+    }
+
+    private func selectTagInAllTagsBrowser(_ name: String) {
+        isCleared = false
+        tagName = name
+        items = []
+        emptyLabel.stringValue = "正在查找带有「\(name)」标签的项目…"
+        emptyLabel.isHidden = false
+        applyOrganization()
+        refreshPathBar()
+        updateNavigationButtons()
+        updateStatus()
+        delegate?.paneDidActivate(self)
+        runTagSearch(name)
+    }
+
     /// 侧栏点击标签：平铺列出所有带该标签的项目（与访达一致）。
     func showTag(_ name: String) {
+        isCleared = false
+        isAllTagsMode = false
+        syncAllTagsColumnVisibility()
         // 先落状态再 activate：焦点回调要靠 tagName 把侧栏切到对应的标签行
         if tagName == nil { viewModeBeforeTag = viewMode }
         tagName = name
@@ -677,11 +806,44 @@ final class PaneView: NSView {
         }
     }
 
-    /// 离开标签视图：恢复进入前的显示方式，地址栏回到真实目录。
-    private func leaveTagMode() {
-        guard tagName != nil else { return }
+    /// 清空标签视图并置于未选中状态（当浏览的标签被删除时调用）
+    func clearTagView() {
+        guard tagName != nil || isTagView else { return }
+        if isAllTagsMode {
+            allTagsColumn.reload(forceSpotlightRefresh: true)
+            if let nextTag = allTagsColumn.selectedTagName {
+                selectTagInAllTagsBrowser(nextTag)
+                return
+            }
+        }
         tagSearch.cancel()
         tagName = nil
+        isAllTagsMode = false
+        syncAllTagsColumnVisibility()
+        isCleared = true
+        if let previous = viewModeBeforeTag {
+            viewModeBeforeTag = nil
+            viewMode = previous
+        }
+        items = []
+        emptyLabel.stringValue = ""
+        emptyLabel.isHidden = true
+        pathBar.clearBadge()
+        pathBar.setBlank()
+        applyOrganization()
+        updateStatus()
+        updateNavigationButtons()
+        delegate?.paneDidActivate(self)
+    }
+
+    /// 离开标签视图：恢复进入前的显示方式，地址栏回到真实目录。
+    private func leaveTagMode() {
+        isCleared = false
+        guard tagName != nil || isAllTagsMode else { return }
+        tagSearch.cancel()
+        tagName = nil
+        isAllTagsMode = false
+        syncAllTagsColumnVisibility()
         emptyLabel.stringValue = "文件夹为空"
         emptyLabel.isHidden = true
         if let previous = viewModeBeforeTag {
@@ -689,6 +851,7 @@ final class PaneView: NSView {
             viewMode = previous
         }
         refreshPathBar()
+        updateNavigationButtons()
         updateStatus()
     }
 
@@ -713,7 +876,11 @@ final class PaneView: NSView {
                                           group: groupMode)
         listView.update(sections: sections)
         iconView.update(sections: sections)
-        columnView.refresh(root: currentURL, sort: sortField, ascending: ascending)
+        if isTagView || isCleared {
+            columnView.refreshWithCustomItems(items, sort: sortField, ascending: ascending)
+        } else {
+            columnView.refresh(root: currentURL, sort: sortField, ascending: ascending)
+        }
         updateStatus()
     }
 
@@ -734,13 +901,18 @@ final class PaneView: NSView {
         iconView.isHidden = viewMode != .icons
         columnView.isHidden = viewMode != .columns
         listAndIconContainer.isHidden = viewMode == .columns
-        pathBar.isColumnMode = viewMode == .columns
+        syncAllTagsColumnVisibility()
+        pathBar.isColumnMode = viewMode == .columns && !isTagView
         sizeSlider.configure(for: viewMode)
         switch viewMode {
         case .list: listView.focus()
         case .icons: iconView.focus()
         case .columns:
-            columnView.refresh(root: currentURL, sort: sortField, ascending: ascending)
+            if isTagView || isCleared {
+                columnView.refreshWithCustomItems(items, sort: sortField, ascending: ascending)
+            } else {
+                columnView.refresh(root: currentURL, sort: sortField, ascending: ascending)
+            }
             columnView.focus()
         }
         refreshPathBar()
@@ -758,18 +930,18 @@ final class PaneView: NSView {
         // 不用 NSButton.isEnabled 表达历史状态：inline 无边框按钮在禁用时会
         // 把模板图标画得近乎透明，看起来像箭头消失。始终保持图标可见，
         // 仅降低透明度；动作本身仍会检查是否有可导航的位置。
-        updateNavigationButton(backButton, available: !backStack.isEmpty)
-        updateNavigationButton(forwardButton, available: !forwardStack.isEmpty)
+        updateNavigationButton(backButton, available: canGoBack)
+        updateNavigationButton(forwardButton, available: canGoForward)
     }
 
     private func updateNavigationButton(_ button: NSButton, available: Bool) {
-        button.isEnabled = true
+        button.isEnabled = available
         button.alphaValue = available ? 1 : 0.35
     }
 
     private func updateStatus() {
-        // 分栏模式下统计当前活动列，和顶栏地址保持一致
-        let count = viewMode == .columns ? columnView.activeColumnItemCount : items.count
+        // 分栏模式下统计当前活动列（标签视图下直接统计标签匹配项数）
+        let count = (viewMode == .columns && !isTagView && !isCleared) ? columnView.activeColumnItemCount : items.count
         let selected = currentSelection().count
         if selected > 0 {
             statusLeft.stringValue = "\(count) 个项目，已选 \(selected) 个"
@@ -878,16 +1050,17 @@ final class PaneView: NSView {
 
     /// 顶部工具栏标题用的文件夹名（分栏模式下取当前显示位置）。
     var displayedFolderName: String {
+        if isCleared { return "" }
         let base = viewMode == .columns ? columnView.displayURL : currentURL
         if let tagName { return tagName }
         let name = FileManager.default.displayName(atPath: base.path)
         return name.isEmpty ? base.lastPathComponent : name
     }
 
-    /// 是否还有可后退的位置（工具栏箭头用）。
-    var canGoBack: Bool { !backStack.isEmpty }
-    /// 是否还有可前进的位置（工具栏箭头用）。
-    var canGoForward: Bool { !forwardStack.isEmpty }
+    /// 是否还有可后退的位置（工具栏箭头用；标签视图与所有标签视图无地址位置，不提供前进后退）。
+    var canGoBack: Bool { !isTagView && !isCleared && !backStack.isEmpty }
+    /// 是否还有可前进的位置（工具栏箭头用；标签视图与所有标签视图无地址位置，不提供前进后退）。
+    var canGoForward: Bool { !isTagView && !isCleared && !forwardStack.isEmpty }
 
     /// 恢复上次的显示方式（不改写全局默认）。
     func restoreViewMode(_ mode: ViewMode) {
@@ -921,7 +1094,7 @@ final class PaneView: NSView {
     }
 
     @objc func goBack() {
-        guard let previous = backStack.popLast() else { return }
+        guard canGoBack, let previous = backStack.popLast() else { return }
         activate()
         leaveTagMode()
         let departing = displayedLocation
@@ -934,23 +1107,25 @@ final class PaneView: NSView {
     }
 
     @objc func goForward() {
-        guard let next = forwardStack.popLast() else { return }
+        guard canGoForward, let next = forwardStack.popLast() else { return }
         activate()
         leaveTagMode()
         backStack.append(displayedLocation)
         goToLocation(next, record: false)
     }
 
-    /// 图标视图下是否允许右滑回退：优先走后退历史；若无历史但非根目录，则可右滑回到上一级父目录。
+    /// 图标/列表视图下是否允许右滑回退：标签视图下始终禁止；常规目录下优先走后退历史，若无历史但非根目录则可右滑回到上一级父目录。
     private var canSwipeBackInIconView: Bool {
+        guard !isTagView && !isCleared else { return false }
         if canGoBack { return true }
         let base = currentURL.standardizedFileURL
         let parentPath = (base.path as NSString).deletingLastPathComponent
         return !parentPath.isEmpty && parentPath != base.path
     }
 
-    /// 图标视图触摸板右滑回退：有后退历史时执行浏览器式后退；无后退历史时直接退回上一级父文件夹（并将原目录压入前进栈，支持左滑前进回来）。
+    /// 图标/列表视图触摸板右滑回退：有后退历史时执行浏览器式后退；无后退历史时直接退回上一级父文件夹（并将原目录压入前进栈，支持左滑前进回来）。
     private func swipeBackInIconView() {
+        guard !isTagView && !isCleared else { return }
         if canGoBack {
             goBack()
             return
@@ -1901,9 +2076,15 @@ final class PaneView: NSView {
                 menu.addItem(.separator())
             }
 
-            // 1. 打开 / 在新窗格中打开
+            // 1. 打开 / 在新窗格中打开（仅针对文件夹） / 在新窗口定位
             add(menu, "打开", #selector(contextOpen))
-            add(menu, "在新窗格中打开", #selector(contextOpenInOtherPane))
+            let isFolder = targetItems.count == 1 && targetItems[0].isNavigable
+            if isFolder {
+                add(menu, "在新窗格中打开", #selector(contextOpenInOtherPane))
+            }
+            if targetItems.count == 1 {
+                add(menu, "在新窗口定位", #selector(contextLocateInOtherPane))
+            }
 
             // 打开方式（仅对单选有效）
             if targetItems.count == 1, let openWithSub = makeOpenWithSubmenu(for: targetItems[0]) {
@@ -1971,13 +2152,14 @@ final class PaneView: NSView {
                 menu.addItem(.separator())
             }
 
-            // 6. 标记（高保真横排颜色打勾圆点 + 标签…）
+            // 6. 标记（高保真横排颜色打勾圆点 + 右侧 "..." 按钮弹出图2气泡弹窗）
             let colorPickerItem = TagColorPickerMenuItem(targetURLs: targetItems.map { $0.url })
+            colorPickerItem.onShowPopover = { [weak self] urls, screenRect in
+                DispatchQueue.main.async {
+                    self?.showTagPopover(for: urls, screenRect: screenRect)
+                }
+            }
             menu.addItem(colorPickerItem)
-
-            let tagsManageItem = NSMenuItem(title: "标签…", action: #selector(showTagsManagement), keyEquivalent: "")
-            tagsManageItem.target = self
-            menu.addItem(tagsManageItem)
 
             menu.addItem(.separator())
 
@@ -2106,6 +2288,11 @@ final class PaneView: NSView {
         NotificationCenter.default.post(name: .openInOtherPane, object: item.url)
     }
 
+    @objc private func contextLocateInOtherPane() {
+        guard let item = effectiveContextItems.first else { return }
+        NotificationCenter.default.post(name: .locateInOtherPane, object: item.url)
+    }
+
     @objc private func toggleTagFromMenu(_ sender: NSMenuItem) {
         guard let tagName = sender.representedObject as? String else { return }
         let selected = effectiveContextItems
@@ -2115,12 +2302,37 @@ final class PaneView: NSView {
         refresh()
     }
 
-    @objc private func showTagsManagement() {
-        // 激活标签视图或刷新标签
-        NotificationCenter.default.post(name: .tagsDidChange, object: nil)
+    func showTagPopover(for urls: [URL], screenRect: NSRect) {
+        guard !urls.isEmpty else { return }
+        tagPopover?.close()
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        let vc = TagPopoverViewController(targetURLs: urls)
+        vc.onClose = { [weak popover] in
+            popover?.close()
+        }
+        popover.contentViewController = vc
+        self.tagPopover = popover
+
+        var anchorRect: NSRect
+        if let window = self.window {
+            let windowRect = window.convertFromScreen(screenRect)
+            anchorRect = self.convert(windowRect, from: nil)
+        } else {
+            anchorRect = NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+        }
+
+        if !self.bounds.intersects(anchorRect) {
+            anchorRect = NSRect(x: self.bounds.midX, y: self.bounds.midY, width: 1, height: 1)
+        }
+
+        popover.show(relativeTo: anchorRect, of: self, preferredEdge: .maxY)
     }
 }
 
 extension Notification.Name {
     static let openInOtherPane = Notification.Name("MapleOpenInOtherPane")
+    static let locateInOtherPane = Notification.Name("MapleLocateInOtherPane")
 }
