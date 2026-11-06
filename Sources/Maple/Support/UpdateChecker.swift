@@ -3,12 +3,12 @@ import AppKit
 public final class UpdateChecker: NSObject {
     public static let shared = UpdateChecker()
 
-    /// 当前应用版本号，默认为 1.0.4
+    /// 当前应用版本号，默认为 1.0.5
     public static var currentVersion: String {
         if let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String, !ver.isEmpty {
             return ver
         }
-        return "1.0.4"
+        return "1.0.5"
     }
 
     private let repoOwner = "liceal"
