@@ -845,7 +845,7 @@ final class FilePreviewPane: NSView {
         }
 
         var rows: [(String, String)] = [
-            ("已选项目".localized, "\(items.count) 项".localized)
+            ("已选项目".localized, "\(items.count) \("项".localized)")
         ]
         if !hasDirectory {
             rows.append(("总大小".localized, Format.bytes(totalKnownSize)))
@@ -870,10 +870,10 @@ final class FilePreviewPane: NSView {
 
         let name = FileManager.default.displayName(atPath: url.path)
         nameLabel.stringValue = name.isEmpty ? url.lastPathComponent : name
-        subtitleLabel.stringValue = "文件夹 - \(itemsCount) 项"
+        subtitleLabel.stringValue = "\("文件夹".localized) - \(itemsCount) \("项".localized)"
 
         var rows: [(String, String)] = [
-            ("包含内容".localized, "\(itemsCount) 项".localized),
+            ("包含内容".localized, "\(itemsCount) \("项".localized)"),
             ("路径".localized, url.path)
         ]
         if let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey]) {

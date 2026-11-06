@@ -32,7 +32,7 @@ final class DisplayOptionsViewController: NSViewController {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 264, height: 226))
         view = root
 
-        let title = NSTextField(labelWithString: "查看显示选项")
+        let title = NSTextField(labelWithString: "查看显示选项".localized)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
         configure(slider: iconSlider,
@@ -48,15 +48,15 @@ final class DisplayOptionsViewController: NSViewController {
         hiddenCheck.target = self
         hiddenCheck.action = #selector(hiddenChanged)
 
-        resetButton.title = "恢复默认"
+        resetButton.title = "恢复默认".localized
         resetButton.bezelStyle = .rounded
         resetButton.controlSize = .small
         resetButton.font = .systemFont(ofSize: 11)
         resetButton.target = self
         resetButton.action = #selector(resetDefaults)
 
-        let iconHeader = headerRow(title: "图标大小", value: iconValue)
-        let rowHeader = headerRow(title: "列表行高", value: rowValue)
+        let iconHeader = headerRow(title: "图标大小".localized, value: iconValue)
+        let rowHeader = headerRow(title: "列表行高".localized, value: rowValue)
 
         let stack = NSStackView(views: [title, iconHeader, iconSlider, rowHeader, rowSlider, hiddenCheck, resetButton])
         stack.translatesAutoresizingMaskIntoConstraints = false

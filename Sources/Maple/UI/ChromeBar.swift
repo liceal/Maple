@@ -1,10 +1,6 @@
 import AppKit
 
-/// 顶部工具条：自绘的一条 38pt 区域，替代系统标题栏 + 系统工具栏。
-///
-/// 之所以不用 NSToolbar：系统工具条会自带标题栏底纹，而且左侧条目总是紧贴交通灯，
-/// 无法与侧栏右沿对齐。这里自己画，背景与窗格同色、不画分隔线，
-/// 左右分别与侧栏 / 窗格对齐，视觉上和内容连成一整块（QSpace 那种一体感）。
+/// 顶部工具条：38pt 区域，集成导航与窗格操作。
 final class ChromeBar: NSView {
 
     static let height = Theme.chromeHeight
@@ -31,16 +27,16 @@ final class ChromeBar: NSView {
 
     private func setup() {
         newFolderButton.image = Theme.symbol("folder.badge.plus", size: 15)
-        newFolderButton.toolTip = "新建文件夹"
+        newFolderButton.toolTip = "新建文件夹".localized
 
         searchButton.image = Theme.symbol("magnifyingglass", size: 15)
-        searchButton.toolTip = "搜索文件（全局搜索 ⇧⌘F，当前位置 ⌘F）"
+        searchButton.toolTip = "搜索文件（全局搜索 ⇧⌘F，当前位置 ⌘F）".localized
 
         moreButton.image = Theme.moreMenuImage()
-        moreButton.toolTip = "更多：新建、排序、分组与显示选项"
+        moreButton.toolTip = "更多：新建、排序、分组与显示选项".localized
 
         layoutButton.image = LayoutMode.single.icon
-        layoutButton.toolTip = "窗口排列方式"
+        layoutButton.toolTip = "窗口排列方式".localized
 
         navView.translatesAutoresizingMaskIntoConstraints = false
         layoutButton.translatesAutoresizingMaskIntoConstraints = false

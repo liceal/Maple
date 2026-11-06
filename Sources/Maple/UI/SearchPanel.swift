@@ -88,7 +88,7 @@ final class SearchPanelController: NSObject {
         progressFinishTimer?.invalidate()
     }
 
-    // MARK: - 极简界面构建
+    // MARK: - 界面构建
 
     private func buildUI() {
         panel.isOpaque = false
@@ -149,17 +149,17 @@ final class SearchPanelController: NSObject {
         clearButton.contentTintColor = .tertiaryLabelColor
         clearButton.target = self
         clearButton.action = #selector(clearSearchText)
-        clearButton.toolTip = "清空搜索内容"
+        clearButton.toolTip = "清空搜索内容".localized
         clearButton.isHidden = true
         topBar.addSubview(clearButton)
 
         searchNowButton.translatesAutoresizingMaskIntoConstraints = false
-        searchNowButton.title = "搜索"
+        searchNowButton.title = "搜索".localized
         searchNowButton.bezelStyle = .inline
         searchNowButton.font = .systemFont(ofSize: 11.5, weight: .medium)
         searchNowButton.target = self
         searchNowButton.action = #selector(triggerExplicitSearch)
-        searchNowButton.toolTip = "立即执行搜索（↩）"
+        searchNowButton.toolTip = "立即执行搜索（↩）".localized
         topBar.addSubview(searchNowButton)
 
         scopeControl.translatesAutoresizingMaskIntoConstraints = false
@@ -180,14 +180,14 @@ final class SearchPanelController: NSObject {
 
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         settingsButton.image = Theme.symbol("gearshape", size: 14)
-        settingsButton.toolTip = "权限与搜索设置（⌘,）"
+        settingsButton.toolTip = "权限与搜索设置（⌘,）".localized
         settingsButton.target = self
         settingsButton.action = #selector(openSettingsClicked)
         topBar.addSubview(settingsButton)
 
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.image = Theme.symbol("xmark", size: 12, weight: .semibold)
-        closeButton.toolTip = "关闭搜索窗（Esc）"
+        closeButton.toolTip = "关闭搜索窗（Esc）".localized
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
         topBar.addSubview(closeButton)
@@ -281,24 +281,24 @@ final class SearchPanelController: NSObject {
         bottomBar.addSubview(pathLabel)
 
         openDirectButton.translatesAutoresizingMaskIntoConstraints = false
-        openDirectButton.title = "直接打开"
+        openDirectButton.title = "直接打开".localized
         openDirectButton.bezelStyle = .rounded
         openDirectButton.controlSize = .small
         openDirectButton.font = .systemFont(ofSize: 11.5)
         openDirectButton.target = self
         openDirectButton.action = #selector(openSelectedDirectly)
-        openDirectButton.toolTip = "直接打开选中的文件或文件夹（⌘↩）"
+        openDirectButton.toolTip = "直接打开选中的文件或文件夹（⌘↩）".localized
         bottomBar.addSubview(openDirectButton)
 
         locateInPaneButton.translatesAutoresizingMaskIntoConstraints = false
-        locateInPaneButton.title = "在窗格中定位"
+        locateInPaneButton.title = "在窗格中定位".localized
         locateInPaneButton.bezelStyle = .rounded
         locateInPaneButton.controlSize = .small
         locateInPaneButton.font = .systemFont(ofSize: 11.5, weight: .medium)
         locateInPaneButton.contentTintColor = .controlAccentColor
         locateInPaneButton.target = self
         locateInPaneButton.action = #selector(locateSelectedInMainPane)
-        locateInPaneButton.toolTip = "在主窗口当前窗格中打开并高亮定位该项"
+        locateInPaneButton.toolTip = "在主窗口当前窗格中打开并高亮定位该项".localized
         bottomBar.addSubview(locateInPaneButton)
 
         sizeSlider.translatesAutoresizingMaskIntoConstraints = false
@@ -995,36 +995,36 @@ final class SearchPanelController: NSObject {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let revealInPane = NSMenuItem(title: "在主窗口当前窗格中定位", action: #selector(ctxRevealInPane(_:)), keyEquivalent: "")
+        let revealInPane = NSMenuItem(title: "在主窗口当前窗格中定位".localized, action: #selector(ctxRevealInPane(_:)), keyEquivalent: "")
         revealInPane.target = self
         revealInPane.representedObject = target.url
         menu.addItem(revealInPane)
 
-        let openOtherPane = NSMenuItem(title: "在新窗格中打开", action: #selector(ctxOpenInOtherPane(_:)), keyEquivalent: "")
+        let openOtherPane = NSMenuItem(title: "在新窗格中打开".localized, action: #selector(ctxOpenInOtherPane(_:)), keyEquivalent: "")
         openOtherPane.target = self
         openOtherPane.representedObject = target.url
         menu.addItem(openOtherPane)
 
-        let openDirect = NSMenuItem(title: "直接打开", action: #selector(ctxOpenDirectly(_:)), keyEquivalent: "")
+        let openDirect = NSMenuItem(title: "直接打开".localized, action: #selector(ctxOpenDirectly(_:)), keyEquivalent: "")
         openDirect.target = self
         openDirect.representedObject = target.url
         menu.addItem(openDirect)
 
         menu.addItem(.separator())
 
-        let revealFinder = NSMenuItem(title: "在访达中显示", action: #selector(ctxRevealInFinder(_:)), keyEquivalent: "")
+        let revealFinder = NSMenuItem(title: "在访达中显示".localized, action: #selector(ctxRevealInFinder(_:)), keyEquivalent: "")
         revealFinder.target = self
         revealFinder.representedObject = target.url
         menu.addItem(revealFinder)
 
-        let copyPath = NSMenuItem(title: "拷贝路径", action: #selector(ctxCopyPath(_:)), keyEquivalent: "")
+        let copyPath = NSMenuItem(title: "拷贝路径".localized, action: #selector(ctxCopyPath(_:)), keyEquivalent: "")
         copyPath.target = self
         copyPath.representedObject = target.url
         menu.addItem(copyPath)
 
         menu.addItem(.separator())
 
-        let trashItem = NSMenuItem(title: "移到废纸篓", action: #selector(ctxTrashItem(_:)), keyEquivalent: "")
+        let trashItem = NSMenuItem(title: "移到废纸篓".localized, action: #selector(ctxTrashItem(_:)), keyEquivalent: "")
         trashItem.target = self
         trashItem.representedObject = target.url
         menu.addItem(trashItem)
@@ -1116,7 +1116,7 @@ extension SearchPanelController: NSTextFieldDelegate {
     }
 }
 
-// MARK: - 丝滑动态搜索进度条
+// MARK: - 搜索进度条
 
 private final class SearchProgressBar: NSView {
 
@@ -1190,7 +1190,7 @@ private final class SearchProgressBar: NSView {
     }
 }
 
-// MARK: - 极简范围切换胶囊控件（「当前文件夹」 / 「此 Mac」）
+// MARK: - 搜索范围切换控件
 
 private final class SearchScopePillControl: NSView {
 
@@ -1811,7 +1811,7 @@ private final class SearchColumnHitCell: NSTableCellView {
     }
 }
 
-// MARK: - 极简无边框输入框与居中浮动面板
+// MARK: - 输入框与面板
 
 private final class MinimalSearchTextField: NSTextField {
     override var acceptsFirstResponder: Bool { true }

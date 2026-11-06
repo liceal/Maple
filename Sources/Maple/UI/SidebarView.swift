@@ -83,7 +83,7 @@ final class SidebarNode: NSObject {
     }
 }
 
-/// 仿访达与 QSpace 的 source list 侧栏：个人收藏 / iCloud / 位置 / 服务器 / 标签 + 底部「⋯」操作栏。
+/// 侧栏视图：个人收藏 / iCloud / 位置 / 服务器 / 标签 + 底部操作栏。
 final class SidebarView: NSView {
 
     var onSelect: ((URL) -> Void)?
@@ -181,6 +181,13 @@ final class SidebarView: NSView {
         setup()
         reload()
         observeVolumes()
+        NotificationCenter.default.addObserver(self, selector: #selector(handleLanguageDidChangeNotification), name: .languageDidChange, object: nil)
+    }
+
+    @objc private func handleLanguageDidChangeNotification() {
+        moreButton.toolTip = "侧栏选项与操作".localized
+        settingsButton.toolTip = "偏好设置与权限管理 (⌘,)".localized
+        reload()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -234,13 +241,13 @@ final class SidebarView: NSView {
         footerBar.addSubview(footerLine)
 
         moreButton.image = Theme.symbol("ellipsis.circle", size: 14.5, weight: .medium)
-        moreButton.toolTip = "侧栏选项与操作"
+        moreButton.toolTip = "侧栏选项与操作".localized
         moreButton.target = self
         moreButton.action = #selector(moreButtonClicked(_:))
         footerBar.addSubview(moreButton)
 
         settingsButton.image = Theme.symbol("gearshape", size: 13.5, weight: .regular)
-        settingsButton.toolTip = "偏好设置与权限管理 (⌘,)"
+        settingsButton.toolTip = "偏好设置与权限管理 (⌘,)".localized
         settingsButton.target = self
         settingsButton.action = #selector(settingsButtonClicked)
         footerBar.addSubview(settingsButton)
@@ -293,7 +300,7 @@ final class SidebarView: NSView {
 
     /// 构造「展示分类」子菜单。
     private func makeCategorySubmenu() -> NSMenu {
-        let sub = NSMenu(title: "展示分类")
+        let sub = NSMenu(title: "展示分类".localized)
         sub.autoenablesItems = false
         for category in SidebarCategory.allCases {
             let item = NSMenuItem(title: category.title,
@@ -305,7 +312,7 @@ final class SidebarView: NSView {
             sub.addItem(item)
         }
         sub.addItem(.separator())
-        let showAll = NSMenuItem(title: "显示全部分类",
+        let showAll = NSMenuItem(title: "显示全部分类".localized,
                                  action: #selector(showAllCategoriesClicked),
                                  keyEquivalent: "")
         showAll.target = self
@@ -320,14 +327,14 @@ final class SidebarView: NSView {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let categoryItem = NSMenuItem(title: "展示分类", action: nil, keyEquivalent: "")
+        let categoryItem = NSMenuItem(title: "展示分类".localized, action: nil, keyEquivalent: "")
         categoryItem.submenu = makeCategorySubmenu()
         menu.addItem(categoryItem)
 
         menu.addItem(.separator())
 
-        let iconStyleItem = NSMenuItem(title: "图标风格", action: nil, keyEquivalent: "")
-        let styleSub = NSMenu(title: "图标风格")
+        let iconStyleItem = NSMenuItem(title: "图标风格".localized, action: nil, keyEquivalent: "")
+        let styleSub = NSMenu(title: "图标风格".localized)
         styleSub.autoenablesItems = false
         for style in SidebarIconStyle.allCases {
             let item = NSMenuItem(title: style.title, action: #selector(selectSidebarIconStyleClicked(_:)), keyEquivalent: "")
@@ -341,17 +348,17 @@ final class SidebarView: NSView {
 
         menu.addItem(.separator())
 
-        let expandAll = NSMenuItem(title: "展开全部分组", action: #selector(expandAllGroupsClicked), keyEquivalent: "")
+        let expandAll = NSMenuItem(title: "展开全部分组".localized, action: #selector(expandAllGroupsClicked), keyEquivalent: "")
         expandAll.target = self
         menu.addItem(expandAll)
 
-        let collapseAll = NSMenuItem(title: "收起全部分组", action: #selector(collapseAllGroupsClicked), keyEquivalent: "")
+        let collapseAll = NSMenuItem(title: "收起全部分组".localized, action: #selector(collapseAllGroupsClicked), keyEquivalent: "")
         collapseAll.target = self
         menu.addItem(collapseAll)
 
         menu.addItem(.separator())
 
-        let refresh = NSMenuItem(title: "刷新侧栏", action: #selector(refreshClicked), keyEquivalent: "")
+        let refresh = NSMenuItem(title: "刷新侧栏".localized, action: #selector(refreshClicked), keyEquivalent: "")
         refresh.target = self
         menu.addItem(refresh)
 
@@ -375,12 +382,12 @@ final class SidebarView: NSView {
 
         // 1. 连接服务器入口
         if node.kind == .connectServer {
-            let connect = NSMenuItem(title: "连接服务器…", action: #selector(connectServerMenuClicked), keyEquivalent: "k")
+            let connect = NSMenuItem(title: "连接服务器…".localized, action: #selector(connectServerMenuClicked), keyEquivalent: "k")
             connect.keyEquivalentModifierMask = [.command]
             connect.target = self
             menu.addItem(connect)
             menu.addItem(.separator())
-            let categoryItem = NSMenuItem(title: "展示分类", action: nil, keyEquivalent: "")
+            let categoryItem = NSMenuItem(title: "展示分类".localized, action: nil, keyEquivalent: "")
             categoryItem.submenu = makeCategorySubmenu()
             menu.addItem(categoryItem)
             return menu
@@ -388,7 +395,7 @@ final class SidebarView: NSView {
 
         // 1b. 所有标签… 入口
         if node.kind == .allTags {
-            let showAll = NSMenuItem(title: "显示所有标签…", action: #selector(showAllTagsFromMenuClicked), keyEquivalent: "")
+            let showAll = NSMenuItem(title: "显示所有标签…".localized, action: #selector(showAllTagsFromMenuClicked), keyEquivalent: "")
             showAll.target = self
             menu.addItem(showAll)
             let extraTags = Tags.allSystemTags
@@ -405,12 +412,12 @@ final class SidebarView: NSView {
             return menu
         }
 
-        // 2. 标签（对齐访达原生菜单风格）
+        // 2. 标签菜单
         if node.kind == .tag {
             let tagName = node.tag ?? node.title
 
             // 1. 在新标签页中打开
-            let openItem = NSMenuItem(title: "在新标签页中打开", action: #selector(openTagInOtherPaneClicked), keyEquivalent: "")
+            let openItem = NSMenuItem(title: "在新标签页中打开".localized, action: #selector(openTagInOtherPaneClicked), keyEquivalent: "")
             openItem.target = self
             openItem.representedObject = tagName
             menu.addItem(openItem)
@@ -418,7 +425,7 @@ final class SidebarView: NSView {
             menu.addItem(.separator())
 
             // 2. 从边栏中移除
-            let hideItem = NSMenuItem(title: "从边栏中移除", action: #selector(hideTagFromSidebarClicked), keyEquivalent: "")
+            let hideItem = NSMenuItem(title: "从边栏中移除".localized, action: #selector(hideTagFromSidebarClicked), keyEquivalent: "")
             hideItem.target = self
             hideItem.representedObject = tagName
             menu.addItem(hideItem)
@@ -444,7 +451,7 @@ final class SidebarView: NSView {
             let currentColorKey = tagDef?.colorKey ?? ""
 
             // 无颜色
-            let noneItem = NSMenuItem(title: "无颜色", action: #selector(colorPickedForTag(_:)), keyEquivalent: "")
+            let noneItem = NSMenuItem(title: "无颜色".localized, action: #selector(colorPickedForTag(_:)), keyEquivalent: "")
             noneItem.target = self
             noneItem.representedObject = (tagName: tagName, colorKey: "none")
             noneItem.image = makePaletteIcon(color: nil)
@@ -486,7 +493,7 @@ final class SidebarView: NSView {
 
             // 如果是已挂载的网络卷：显示「推出」
             if node.isMountedNetworkVolume, let url = node.url {
-                let unmount = NSMenuItem(title: "推出“\(node.title)”", action: #selector(ejectVolumeClicked(_:)), keyEquivalent: "E")
+                let unmount = NSMenuItem(title: "\("推出".localized)“\(node.title)”", action: #selector(ejectVolumeClicked(_:)), keyEquivalent: "E")
                 unmount.keyEquivalentModifierMask = [.command]
                 unmount.target = self
                 unmount.representedObject = url
@@ -496,16 +503,16 @@ final class SidebarView: NSView {
             menu.addItem(.separator())
 
             if let url = node.url {
-                let reveal = NSMenuItem(title: "在 Finder 中显示", action: #selector(revealClicked), keyEquivalent: "")
+                let reveal = NSMenuItem(title: "在 Finder 中显示".localized, action: #selector(revealClicked), keyEquivalent: "")
                 reveal.target = self
                 menu.addItem(reveal)
 
-                let terminal = NSMenuItem(title: "在“终端”中打开", action: #selector(openInTerminalClicked), keyEquivalent: "")
+                let terminal = NSMenuItem(title: "在“终端”中打开".localized, action: #selector(openInTerminalClicked), keyEquivalent: "")
                 terminal.target = self
                 terminal.representedObject = url
                 menu.addItem(terminal)
 
-                let copyPath = NSMenuItem(title: "拷贝路径", action: #selector(copyPathClicked), keyEquivalent: "C")
+                let copyPath = NSMenuItem(title: "拷贝路径".localized, action: #selector(copyPathClicked), keyEquivalent: "C")
                 copyPath.keyEquivalentModifierMask = [.command, .option]
                 copyPath.target = self
                 copyPath.representedObject = url
@@ -514,7 +521,7 @@ final class SidebarView: NSView {
 
             if let entry = node.serverEntry {
                 if let serverURL = entry.url {
-                    let copyServerURL = NSMenuItem(title: "拷贝服务器地址", action: #selector(copyServerURLClicked), keyEquivalent: "")
+                    let copyServerURL = NSMenuItem(title: "拷贝服务器地址".localized, action: #selector(copyServerURLClicked), keyEquivalent: "")
                     copyServerURL.target = self
                     copyServerURL.representedObject = serverURL
                     menu.addItem(copyServerURL)
@@ -522,24 +529,24 @@ final class SidebarView: NSView {
 
                 menu.addItem(.separator())
 
-                let editItem = NSMenuItem(title: "编辑服务器连接…", action: #selector(editContextServerClicked), keyEquivalent: "")
+                let editItem = NSMenuItem(title: "编辑服务器连接…".localized, action: #selector(editContextServerClicked), keyEquivalent: "")
                 editItem.target = self
                 editItem.representedObject = entry
                 menu.addItem(editItem)
 
-                let remove = NSMenuItem(title: "从列表中移除", action: #selector(removeSavedServerClicked(_:)), keyEquivalent: "")
+                let remove = NSMenuItem(title: "从列表中移除".localized, action: #selector(removeSavedServerClicked(_:)), keyEquivalent: "")
                 remove.target = self
                 remove.representedObject = entry.id
                 menu.addItem(remove)
             }
 
             menu.addItem(.separator())
-            let refresh = NSMenuItem(title: "刷新", action: #selector(refreshClicked), keyEquivalent: "")
+            let refresh = NSMenuItem(title: "刷新".localized, action: #selector(refreshClicked), keyEquivalent: "")
             refresh.target = self
             menu.addItem(refresh)
 
             menu.addItem(.separator())
-            let categoryItem = NSMenuItem(title: "展示分类", action: nil, keyEquivalent: "")
+            let categoryItem = NSMenuItem(title: "展示分类".localized, action: nil, keyEquivalent: "")
             categoryItem.submenu = makeCategorySubmenu()
             menu.addItem(categoryItem)
             return menu
@@ -548,36 +555,36 @@ final class SidebarView: NSView {
         // 4. 废纸篓
         if node.isTrash {
             if let url = node.url {
-                let openInOther = NSMenuItem(title: "在新窗格中打开", action: #selector(openInOtherPaneClicked), keyEquivalent: "")
+                let openInOther = NSMenuItem(title: "在新窗格中打开".localized, action: #selector(openInOtherPaneClicked), keyEquivalent: "")
                 openInOther.target = self
                 openInOther.representedObject = url
                 menu.addItem(openInOther)
             }
 
-            let emptyTrash = NSMenuItem(title: "清倒废纸篓…", action: #selector(emptyTrashClicked), keyEquivalent: "")
+            let emptyTrash = NSMenuItem(title: "清倒废纸篓…".localized, action: #selector(emptyTrashClicked), keyEquivalent: "")
             emptyTrash.target = self
             menu.addItem(emptyTrash)
 
             menu.addItem(.separator())
 
             if let url = node.url {
-                let reveal = NSMenuItem(title: "在 Finder 中显示", action: #selector(revealClicked), keyEquivalent: "")
+                let reveal = NSMenuItem(title: "在 Finder 中显示".localized, action: #selector(revealClicked), keyEquivalent: "")
                 reveal.target = self
                 menu.addItem(reveal)
 
-                let copyPath = NSMenuItem(title: "拷贝路径", action: #selector(copyPathClicked), keyEquivalent: "")
+                let copyPath = NSMenuItem(title: "拷贝路径".localized, action: #selector(copyPathClicked), keyEquivalent: "")
                 copyPath.target = self
                 copyPath.representedObject = url
                 menu.addItem(copyPath)
             }
 
             menu.addItem(.separator())
-            let refresh = NSMenuItem(title: "刷新", action: #selector(refreshClicked), keyEquivalent: "")
+            let refresh = NSMenuItem(title: "刷新".localized, action: #selector(refreshClicked), keyEquivalent: "")
             refresh.target = self
             menu.addItem(refresh)
 
             menu.addItem(.separator())
-            let categoryItem = NSMenuItem(title: "展示分类", action: nil, keyEquivalent: "")
+            let categoryItem = NSMenuItem(title: "展示分类".localized, action: nil, keyEquivalent: "")
             categoryItem.submenu = makeCategorySubmenu()
             menu.addItem(categoryItem)
             return menu
@@ -585,14 +592,14 @@ final class SidebarView: NSView {
 
         // 5. 挂载的本地磁盘、DMG 镜像、外置磁盘或文件夹条目
         if let url = node.url {
-            let openInOther = NSMenuItem(title: "在新窗格中打开", action: #selector(openInOtherPaneClicked), keyEquivalent: "")
+            let openInOther = NSMenuItem(title: "在新窗格中打开".localized, action: #selector(openInOtherPaneClicked), keyEquivalent: "")
             openInOther.target = self
             openInOther.representedObject = url
             menu.addItem(openInOther)
 
             // 【核心推出功能】：若是可推出的挂载卷/外置磁盘/DMG，提供「推出“名称”」
             if node.isEjectableVolume || Self.isVolumeEjectable(url: url) {
-                let eject = NSMenuItem(title: "推出“\(node.title)”", action: #selector(ejectVolumeClicked(_:)), keyEquivalent: "E")
+                let eject = NSMenuItem(title: "\("推出".localized)“\(node.title)”", action: #selector(ejectVolumeClicked(_:)), keyEquivalent: "E")
                 eject.keyEquivalentModifierMask = [.command]
                 eject.target = self
                 eject.representedObject = url
@@ -603,29 +610,29 @@ final class SidebarView: NSView {
 
             // 针对个人收藏文件夹：新建文件夹
             if node.isUserFavorite || !node.isEjectableVolume {
-                let newFolder = NSMenuItem(title: "新建文件夹…", action: #selector(newFolderInContextClicked), keyEquivalent: "N")
+                let newFolder = NSMenuItem(title: "新建文件夹…".localized, action: #selector(newFolderInContextClicked), keyEquivalent: "N")
                 newFolder.keyEquivalentModifierMask = [.command, .shift]
                 newFolder.target = self
                 newFolder.representedObject = url
                 menu.addItem(newFolder)
             }
 
-            let reveal = NSMenuItem(title: "在 Finder 中显示", action: #selector(revealClicked), keyEquivalent: "")
+            let reveal = NSMenuItem(title: "在 Finder 中显示".localized, action: #selector(revealClicked), keyEquivalent: "")
             reveal.target = self
             menu.addItem(reveal)
 
-            let terminal = NSMenuItem(title: "在“终端”中打开", action: #selector(openInTerminalClicked), keyEquivalent: "")
+            let terminal = NSMenuItem(title: "在“终端”中打开".localized, action: #selector(openInTerminalClicked), keyEquivalent: "")
             terminal.target = self
             terminal.representedObject = url
             menu.addItem(terminal)
 
-            let copyPath = NSMenuItem(title: "拷贝路径", action: #selector(copyPathClicked), keyEquivalent: "C")
+            let copyPath = NSMenuItem(title: "拷贝路径".localized, action: #selector(copyPathClicked), keyEquivalent: "C")
             copyPath.keyEquivalentModifierMask = [.command, .option]
             copyPath.target = self
             copyPath.representedObject = url
             menu.addItem(copyPath)
 
-            let getInfo = NSMenuItem(title: "显示简介", action: #selector(getInfoClicked), keyEquivalent: "i")
+            let getInfo = NSMenuItem(title: "显示简介".localized, action: #selector(getInfoClicked), keyEquivalent: "i")
             getInfo.keyEquivalentModifierMask = [.command]
             getInfo.target = self
             getInfo.representedObject = url
@@ -633,19 +640,19 @@ final class SidebarView: NSView {
 
             if node.isUserFavorite {
                 menu.addItem(.separator())
-                let remove = NSMenuItem(title: "从个人收藏中移除", action: #selector(removeFavoriteClicked), keyEquivalent: "")
+                let remove = NSMenuItem(title: "从个人收藏中移除".localized, action: #selector(removeFavoriteClicked), keyEquivalent: "")
                 remove.target = self
                 remove.representedObject = url
                 menu.addItem(remove)
             }
 
             menu.addItem(.separator())
-            let refresh = NSMenuItem(title: "刷新", action: #selector(refreshClicked), keyEquivalent: "")
+            let refresh = NSMenuItem(title: "刷新".localized, action: #selector(refreshClicked), keyEquivalent: "")
             refresh.target = self
             menu.addItem(refresh)
 
             menu.addItem(.separator())
-            let categoryItem = NSMenuItem(title: "展示分类", action: nil, keyEquivalent: "")
+            let categoryItem = NSMenuItem(title: "展示分类".localized, action: nil, keyEquivalent: "")
             categoryItem.submenu = makeCategorySubmenu()
             menu.addItem(categoryItem)
             return menu
@@ -695,12 +702,12 @@ final class SidebarView: NSView {
                 }
             }
             if AppSettings.isFavorite(home) {
-                favorites.children.append(SidebarNode(kind: .folder, title: "主目录", url: home, symbol: "house.fill", category: .favorites))
+                favorites.children.append(SidebarNode(kind: .folder, title: "主目录".localized, url: home, symbol: "house.fill", category: .favorites))
             }
             let appURL = URL(fileURLWithPath: "/Applications")
             if AppSettings.isFavorite(appURL) {
                 favorites.children.append(SidebarNode(kind: .folder,
-                                                      title: "应用程序",
+                                                      title: "应用程序".localized,
                                                       url: appURL,
                                                       usesSystemIcon: true,
                                                       category: .favorites))
@@ -728,7 +735,7 @@ final class SidebarView: NSView {
             let cloud = home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
             if FileManager.default.fileExists(atPath: cloud.path) {
                 let group = SidebarNode(kind: .group, title: SidebarCategory.icloud.title, category: .icloud)
-                group.children.append(SidebarNode(kind: .folder, title: "iCloud 云盘", url: cloud, symbol: "icloud", category: .icloud))
+                group.children.append(SidebarNode(kind: .folder, title: "iCloud 云盘".localized, url: cloud, symbol: "icloud", category: .icloud))
                 applySavedOrder(to: group)
                 list.append(group)
             }
@@ -747,7 +754,7 @@ final class SidebarView: NSView {
             }
             if let trash = Self.trashURL() {
                 locations.children.append(SidebarNode(kind: .folder,
-                                                      title: "废纸篓",
+                                                      title: "废纸篓".localized,
                                                       url: trash,
                                                       usesSystemIcon: true,
                                                       isTrash: true,
@@ -800,7 +807,7 @@ final class SidebarView: NSView {
             serversGroup.children.append(
                 SidebarNode(
                     kind: .connectServer,
-                    title: "连接服务器…",
+                    title: "连接服务器…".localized,
                     symbol: "plus.circle",
                     category: .servers
                 )
@@ -820,7 +827,7 @@ final class SidebarView: NSView {
                                                  category: .tags))
             }
             // 对齐访达侧栏底部「所有标签…」入口
-            tags.children.append(SidebarNode(kind: .allTags, title: "所有标签…", category: .tags))
+            tags.children.append(SidebarNode(kind: .allTags, title: "所有标签…".localized, category: .tags))
             list.append(tags)
         }
 
@@ -855,12 +862,12 @@ final class SidebarView: NSView {
 
     private static var favoriteEntries: [(FileManager.SearchPathDirectory, String)] {
         [
-            (.desktopDirectory, "桌面"),
-            (.documentDirectory, "文稿"),
-            (.downloadsDirectory, "下载"),
-            (.moviesDirectory, "影片"),
-            (.musicDirectory, "音乐"),
-            (.picturesDirectory, "图片")
+            (.desktopDirectory, "桌面".localized),
+            (.documentDirectory, "文稿".localized),
+            (.downloadsDirectory, "下载".localized),
+            (.moviesDirectory, "影片".localized),
+            (.musicDirectory, "音乐".localized),
+            (.picturesDirectory, "图片".localized)
         ]
     }
 
@@ -1768,7 +1775,7 @@ extension SidebarView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         open(node)
     }
 
-    // MARK: 仿访达实时灰块拖拽 + 邻行平滑位移动画
+    // MARK: 拖拽排序与避让动画
 
     fileprivate func handleDirectRowClick(row: Int, node: SidebarNode) {
         isRestoringSelection = true
@@ -2078,7 +2085,7 @@ private final class SidebarPlusButton: NSButton {
         imageScaling = .scaleProportionallyDown
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
-        toolTip = "添加标签"
+        toolTip = "添加标签".localized
         updateAppearance()
     }
 
@@ -2385,7 +2392,7 @@ private final class SidebarItemCell: NSTableCellView, NSTextFieldDelegate {
 
         let canEject = node.isEjectableVolume || node.isMountedNetworkVolume
         ejectButton.isHidden = !canEject
-        ejectButton.toolTip = canEject ? "推出“\(node.title)”" : nil
+        ejectButton.toolTip = canEject ? "\("推出".localized)“\(node.title)”" : nil
 
         statusDot.isHidden = canEject || !node.isMountedNetworkVolume
 
@@ -2457,7 +2464,7 @@ private final class SidebarItemCell: NSTableCellView, NSTextFieldDelegate {
     }
 }
 
-// MARK: - 侧栏高保真极简浅灰圆角选中行与悬浮反馈
+// MARK: - 侧栏选中行与悬停效果
 
 private final class SidebarRowView: NSTableRowView {
 
@@ -2530,7 +2537,7 @@ private final class SidebarRowView: NSTableRowView {
     }
 }
 
-// MARK: - 仿访达侧栏拖拽浮动灰块视图（拖拽选中时图标、文字与块底整体变灰并带柔和浮起阴影）
+// MARK: - 侧栏拖拽浮动视图
 
 private final class SidebarFloatingDragView: NSView {
 

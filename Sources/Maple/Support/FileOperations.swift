@@ -197,8 +197,8 @@ enum FileOperations {
         // 1. 非法字符校验（斜杠与冒号）
         if trimmed.contains("/") || trimmed.contains(":") {
             let alert = NSAlert()
-            alert.messageText = "名称中不能包含冒号“:”或斜杠“/”"
-            alert.informativeText = "请选取其他名称。"
+            alert.messageText = "名称中不能包含冒号“:”或斜杠“/”".localized
+            alert.informativeText = "请选取其他名称。".localized
             alert.alertStyle = .warning
             alert.runModal()
             return false
@@ -207,8 +207,8 @@ enum FileOperations {
         // 2. 保留名称校验（单独的点或点点）
         if trimmed == "." || trimmed == ".." {
             let alert = NSAlert()
-            alert.messageText = "你不能使用以点“.”开头的保留名称"
-            alert.informativeText = "“\(trimmed)”已被系统保留。请选取其他名称。"
+            alert.messageText = "你不能使用以点“.”开头的保留名称".localized
+            alert.informativeText = String(format: "“%@”已被系统保留。请选取其他名称。".localized, trimmed)
             alert.alertStyle = .warning
             alert.runModal()
             return false
@@ -219,18 +219,18 @@ enum FileOperations {
         if trimmed.hasPrefix(".") && !oldName.hasPrefix(".") {
             if !AppSettings.showHidden {
                 let alert = NSAlert()
-                alert.messageText = "你不能使用以点“.”开头的名称，因为这些名称已被系统保留。请选取其他名称。"
+                alert.messageText = "你不能使用以点“.”开头的名称，因为这些名称已被系统保留。请选取其他名称。".localized
                 alert.alertStyle = .warning
-                alert.addButton(withTitle: "好")
+                alert.addButton(withTitle: "好".localized)
                 alert.runModal()
                 return false
             } else {
                 let alert = NSAlert()
-                alert.messageText = "确定要使用以“.”开头的名称吗？"
-                alert.informativeText = "以“.”开头的名称会被系统视为隐藏文件。"
+                alert.messageText = "确定要使用以“.”开头的名称吗？".localized
+                alert.informativeText = "以“.”开头的名称会被系统视为隐藏文件。".localized
                 alert.alertStyle = .warning
-                alert.addButton(withTitle: "使用“.”")
-                alert.addButton(withTitle: "取消")
+                alert.addButton(withTitle: "使用“.”".localized)
+                alert.addButton(withTitle: "取消".localized)
                 if alert.runModal() != .alertFirstButtonReturn {
                     return false
                 }
@@ -244,8 +244,8 @@ enum FileOperations {
 
         if FileManager.default.fileExists(atPath: newURL.path) {
             let alert = NSAlert()
-            alert.messageText = "名称“\(trimmed)”已被使用"
-            alert.informativeText = "请选取其他名称。"
+            alert.messageText = String(format: "名称“%@”已被使用".localized, trimmed)
+            alert.informativeText = "请选取其他名称。".localized
             alert.alertStyle = .warning
             alert.runModal()
             return false
@@ -388,18 +388,18 @@ enum FileOperations {
         let count = urls.count
         if count == 1 {
             let name = urls[0].lastPathComponent
-            alert.messageText = "确定要永久删除“\(name)”吗？"
-            alert.informativeText = "此项目将被立即抹掉。您无法撤销此操作。"
+            alert.messageText = String(format: "确定要永久删除“%@”吗？".localized, name)
+            alert.informativeText = "此项目将被立即抹掉。您无法撤销此操作。".localized
         } else {
-            alert.messageText = "确定要永久删除这 \(count) 个项目吗？"
-            alert.informativeText = "这些项目将被立即抹掉。您无法撤销此操作。"
+            alert.messageText = String(format: "确定要永久删除这 %d 个项目吗？".localized, count)
+            alert.informativeText = "这些项目将被立即抹掉。您无法撤销此操作。".localized
         }
         alert.alertStyle = .critical
-        let delBtn = alert.addButton(withTitle: "删除")
+        let delBtn = alert.addButton(withTitle: "删除".localized)
         if #available(macOS 11.0, *) {
             delBtn.hasDestructiveAction = true
         }
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "取消".localized)
 
         let performAction = {
             DispatchQueue.global(qos: .userInitiated).async {
@@ -486,11 +486,11 @@ enum FileOperations {
     /// 清倒废纸篓（带二次确认弹窗与清倒音效）
     static func emptyTrash(window: NSWindow? = nil, completion: (() -> Void)? = nil) {
         let alert = NSAlert()
-        alert.messageText = "确定要清倒废纸篓吗？"
-        alert.informativeText = "此操作将永久抹掉废纸篓中的所有项目，且无法撤销。"
+        alert.messageText = "确定要清倒废纸篓吗？".localized
+        alert.informativeText = "此操作将永久抹掉废纸篓中的所有项目，且无法撤销。".localized
         alert.alertStyle = .critical
-        alert.addButton(withTitle: "清倒废纸篓")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "清倒废纸篓".localized)
+        alert.addButton(withTitle: "取消".localized)
 
         let performEmpty = {
             let script = "tell application \"Finder\" to empty trash"

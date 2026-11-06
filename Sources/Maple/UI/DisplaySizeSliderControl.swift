@@ -141,7 +141,7 @@ final class DisplaySizeSliderControl: NSView {
             let val = Int(AppSettings.gridIconSize)
             slider.integerValue = val
             label.stringValue = "\(val)"
-            slider.toolTip = "调节图标大小（32~128，支持点击后键盘 ← / → 调节）"
+            slider.toolTip = "调节图标大小（32~128，支持点击后键盘 ← / → 调节）".localized
 
         case .list:
             slider.minValue = 16
@@ -150,7 +150,7 @@ final class DisplaySizeSliderControl: NSView {
             let val = Int(AppSettings.listIconSize)
             slider.integerValue = val
             label.stringValue = "\(val)"
-            slider.toolTip = "调节行高与图标尺寸（16~32，支持点击后键盘 ← / → 调节）"
+            slider.toolTip = "调节行高与图标尺寸（16~32，支持点击后键盘 ← / → 调节）".localized
 
         case .columns:
             slider.minValue = 160
@@ -159,7 +159,7 @@ final class DisplaySizeSliderControl: NSView {
             let val = Int(AppSettings.browserColumnWidth)
             slider.integerValue = val
             label.stringValue = "\(val)"
-            slider.toolTip = "调节分栏列宽（160~360，支持点击后键盘 ← / → 调节）"
+            slider.toolTip = "调节分栏列宽（160~360，支持点击后键盘 ← / → 调节）".localized
         }
     }
 

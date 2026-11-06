@@ -93,7 +93,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
             backing: .buffered,
             defer: false
         )
-        win.title = "连接服务器"
+        win.title = "连接服务器".localized
         win.isReleasedWhenClosed = false
         win.delegate = self
 
@@ -126,7 +126,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
         content.addSubview(protoLabel)
         content.addSubview(protocolPopup)
 
-        let addrLabel = Theme.label("服务器地址：", size: 12, weight: .medium, color: .labelColor)
+        let addrLabel = Theme.label("服务器地址：".localized, size: 12, weight: .medium, color: .labelColor)
         addressField.translatesAutoresizingMaskIntoConstraints = false
         addressField.placeholderString = "smb://192.168.1.100/share"
         addressField.font = .systemFont(ofSize: 12.5)
@@ -135,21 +135,21 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
         content.addSubview(addrLabel)
         content.addSubview(addressField)
 
-        let addFavButton = NSButton(title: "+ 收藏", target: self, action: #selector(addFavoriteServerClicked))
+        let addFavButton = NSButton(title: "+ 收藏".localized, target: self, action: #selector(addFavoriteServerClicked))
         addFavButton.translatesAutoresizingMaskIntoConstraints = false
         addFavButton.bezelStyle = .rounded
-        addFavButton.toolTip = "将当前服务器地址保存到左侧“服务器”分类"
+        addFavButton.toolTip = "将当前服务器地址保存到左侧“服务器”分类".localized
         content.addSubview(addFavButton)
 
-        let nameLabel = Theme.label("显示名称：", size: 12, weight: .medium, color: .labelColor)
+        let nameLabel = Theme.label("显示名称：".localized, size: 12, weight: .medium, color: .labelColor)
         nameField.translatesAutoresizingMaskIntoConstraints = false
-        nameField.placeholderString = "可选，例如：家庭 NAS / 团队共享盘"
+        nameField.placeholderString = "可选，例如：家庭 NAS / 团队共享盘".localized
         nameField.font = .systemFont(ofSize: 12.5)
         content.addSubview(nameLabel)
         content.addSubview(nameField)
 
         // 已保存的服务器列表
-        let listHeader = Theme.label("常用服务器（双击可直接连接）：", size: 11.5, weight: .medium, color: .secondaryLabelColor)
+        let listHeader = Theme.label("常用服务器（双击可直接连接）：".localized, size: 11.5, weight: .medium, color: .secondaryLabelColor)
         content.addSubview(listHeader)
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("server"))
@@ -190,33 +190,33 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
         spinnerWidthConstraint = spinnerWidth
 
         // 底部操作栏
-        removeButton.title = "移除所选"
+        removeButton.title = "移除所选".localized
         removeButton.bezelStyle = .rounded
         removeButton.translatesAutoresizingMaskIntoConstraints = false
         removeButton.target = self
         removeButton.action = #selector(removeSelectedClicked)
         content.addSubview(removeButton)
 
-        let browseNetButton = NSButton(title: "浏览网络邻居", target: self, action: #selector(browseNetworkClicked))
+        let browseNetButton = NSButton(title: "浏览网络邻居".localized, target: self, action: #selector(browseNetworkClicked))
         browseNetButton.bezelStyle = .rounded
         browseNetButton.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(browseNetButton)
 
-        testButton.title = "测试连接"
+        testButton.title = "测试连接".localized.localized
         testButton.bezelStyle = .rounded
-        testButton.toolTip = "测试目标服务器主机与协议端口是否可连通"
+        testButton.toolTip = "测试目标服务器主机与协议端口是否可连通".localized
         testButton.translatesAutoresizingMaskIntoConstraints = false
         testButton.target = self
         testButton.action = #selector(testConnectionClicked)
         content.addSubview(testButton)
 
-        let cancelButton = NSButton(title: "取消", target: self, action: #selector(cancelClicked))
+        let cancelButton = NSButton(title: "取消".localized, target: self, action: #selector(cancelClicked))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(cancelButton)
 
-        let connectButton = NSButton(title: "连接", target: self, action: #selector(connectClicked))
+        let connectButton = NSButton(title: "连接".localized, target: self, action: #selector(connectClicked))
         connectButton.bezelStyle = .rounded
         connectButton.keyEquivalent = "\r"
         connectButton.translatesAutoresizingMaskIntoConstraints = false
@@ -326,7 +326,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
         activeTestTimeout = nil
         activeTestConnection?.cancel()
         activeTestConnection = nil
-        testButton.title = "测试连接"
+        testButton.title = "测试连接".localized
     }
 
     /// 根据协议返回默认端口号。
@@ -375,7 +375,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
         let port: UInt16 = url.port.flatMap { UInt16(exactly: $0) } ?? Self.defaultPort(for: url.scheme)
         let schemeUpper = (url.scheme ?? "SMB").uppercased()
         setStatus("正在测试连接 \(host):\(port) (\(schemeUpper))…", color: .secondaryLabelColor, spinning: true)
-        testButton.title = "测试中…"
+        testButton.title = "测试中…".localized
 
         runTCPProbe(host: host, port: port, remoteURL: url, fallbackPort: (port == 445 && url.port == nil) ? 139 : nil)
     }
@@ -383,7 +383,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
     private func runTCPProbe(host: String, port: UInt16, remoteURL: URL, fallbackPort: UInt16?) {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             setStatus("✗ 端口号无效 (\(port))", color: .systemRed, spinning: false)
-            testButton.title = "测试连接"
+            testButton.title = "测试连接".localized
             return
         }
 
@@ -414,7 +414,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
                     let elapsedMs = max(1, Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000))
                     let mounted = Self.findMountedVolume(matching: remoteURL) != nil
                     let mountSuffix = mounted ? "，当前已挂载" : ""
-                    self.testButton.title = "测试连接"
+                    self.testButton.title = "测试连接".localized
                     self.setStatus("✓ 连接成功：\(host):\(port) 可正常访问（延迟 \(elapsedMs) ms\(mountSuffix)）",
                                    color: .systemGreen,
                                    spinning: false)
@@ -422,7 +422,7 @@ final class ServerConnectWindowController: NSObject, NSWindowDelegate, NSTableVi
                     // SMB 445 不通时自动尝试 NetBIOS 139 端口
                     self.runTCPProbe(host: host, port: fb, remoteURL: remoteURL, fallbackPort: nil)
                 } else {
-                    self.testButton.title = "测试连接"
+                    self.testButton.title = "测试连接".localized
                     let detail = errMsg ?? "连接超时或目标端口未开放"
                     self.setStatus("✗ 连接失败：无法访问 \(host):\(port)（\(detail)）",
                                    color: .systemRed,

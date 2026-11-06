@@ -3,12 +3,12 @@ import AppKit
 public final class UpdateChecker: NSObject {
     public static let shared = UpdateChecker()
 
-    /// 当前应用版本号，默认为 1.0.5
+    /// 当前应用版本号
     public static var currentVersion: String {
         if let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String, !ver.isEmpty {
             return ver
         }
-        return "1.0.5"
+        return "1.0.6"
     }
 
     private let repoOwner = "liceal"
@@ -136,13 +136,13 @@ public final class UpdateChecker: NSObject {
 
     private func showNewVersionAlert(newVersion: String, currentVersion: String, notes: String, dmgURL: URL?, htmlUrl: String) {
         let alert = NSAlert()
-        alert.messageText = "发现新版本 Maple v\(newVersion) 🍁"
+        alert.messageText = String(format: "发现新版本 Maple v%@ 🍁".localized, newVersion)
         
         let trimmedNotes = notes.count > 300 ? String(notes.prefix(300)) + "\n..." : notes
-        alert.informativeText = "当前版本：v\(currentVersion)\n最新版本：v\(newVersion)\n\n更新说明：\n\(trimmedNotes)"
+        alert.informativeText = "\("当前版本：".localized)v\(currentVersion)\n\("最新版本：".localized)v\(newVersion)\n\n\("更新说明：".localized)\n\(trimmedNotes)"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "在线更新")
-        alert.addButton(withTitle: "稍后提示")
+        alert.addButton(withTitle: "在线更新".localized)
+        alert.addButton(withTitle: "稍后提示".localized)
 
         if let appIcon = NSApp.applicationIconImage {
             alert.icon = appIcon
@@ -166,10 +166,10 @@ public final class UpdateChecker: NSObject {
 
     private func showUpToDateAlert() {
         let alert = NSAlert()
-        alert.messageText = "已是最新版本"
-        alert.informativeText = "Maple v\(UpdateChecker.currentVersion) 目前已是最新版本，无需更新。"
+        alert.messageText = "已是最新版本".localized
+        alert.informativeText = "Maple v\(UpdateChecker.currentVersion) \("目前已是最新版本，无需更新。".localized)"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: "好".localized)
 
         if let appIcon = NSApp.applicationIconImage {
             alert.icon = appIcon
@@ -229,7 +229,7 @@ private final class OnlineUpdateProgressController: NSObject, URLSessionDownload
             backing: .buffered,
             defer: false
         )
-        win.title = "在线更新 Maple"
+        win.title = "在线更新 Maple".localized
         win.center()
         win.isReleasedWhenClosed = false
 
@@ -261,7 +261,7 @@ private final class OnlineUpdateProgressController: NSObject, URLSessionDownload
         root.addSubview(progress)
         self.progressIndicator = progress
 
-        let cancelBtn = NSButton(title: "取消", target: self, action: #selector(cancelClicked))
+        let cancelBtn = NSButton(title: "取消".localized, target: self, action: #selector(cancelClicked))
         cancelBtn.bezelStyle = .rounded
         cancelBtn.frame = NSRect(x: 320, y: 14, width: 76, height: 28)
         root.addSubview(cancelBtn)
@@ -438,11 +438,11 @@ private final class OnlineUpdateProgressController: NSObject, URLSessionDownload
             self.window = nil
 
             let alert = NSAlert()
-            alert.messageText = "在线更新异常"
-            alert.informativeText = "\(message)\n\n您可以前往网页手动下载最新版本。"
+            alert.messageText = "在线更新异常".localized
+            alert.informativeText = "\(message)\n\n\("您可以前往网页手动下载最新版本。".localized)"
             alert.alertStyle = .warning
-            alert.addButton(withTitle: "前往网页")
-            alert.addButton(withTitle: "取消")
+            alert.addButton(withTitle: "前往网页".localized)
+            alert.addButton(withTitle: "取消".localized)
 
             if alert.runModal() == .alertFirstButtonReturn {
                 if let url = URL(string: self.fallbackURL) {

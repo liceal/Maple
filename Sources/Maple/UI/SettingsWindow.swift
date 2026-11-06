@@ -17,15 +17,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     private var languageRadios: [NSButton] = []
     private var sidebarIconRadios: [NSButton] = []
     private var sidebarIconStyleRadios: [NSButton] = []
-    private let showPaneBorderCheckbox = NSButton(checkboxWithTitle: "显示边框", target: nil, action: nil)
-    private let highlightPaneAddressBarCheckbox = NSButton(checkboxWithTitle: "高亮地址栏", target: nil, action: nil)
-    private let keepPaneCornerRadiusCheckbox = NSButton(checkboxWithTitle: "圆角", target: nil, action: nil)
-    private let showItemInfoCheckbox = NSButton(checkboxWithTitle: "显示项目信息", target: nil, action: nil)
-    private let hideBottomStatusBarCheckbox = NSButton(checkboxWithTitle: "默认隐藏", target: nil, action: nil)
-    private let showSelectedSizeCheckbox = NSButton(checkboxWithTitle: "在底部状态栏显示选择项目大小", target: nil, action: nil)
-    private let calculateFolderSizesCheckbox = NSButton(checkboxWithTitle: "计算并显示文件夹大小", target: nil, action: nil)
-    private let hiddenCheckbox = NSButton(checkboxWithTitle: "显示以点（.）开头的隐藏文件（快捷键 ⌘⇧.）", target: nil, action: nil)
-    private let zebraCheckbox = NSButton(checkboxWithTitle: "在列表视图中显示交替行底色（斑马线）", target: nil, action: nil)
+    private let showPaneBorderCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let highlightPaneAddressBarCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let keepPaneCornerRadiusCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let showItemInfoCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let hideBottomStatusBarCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let showSelectedSizeCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let calculateFolderSizesCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let hiddenCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let zebraCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let iconSizeSlider = NSSlider()
     private let iconSizeValueLabel = NSTextField(labelWithString: "")
     private let rowHeightSlider = NSSlider()
@@ -49,16 +49,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let iconColor: NSColor
     }
 
-    private let categories: [CategoryItem] = [
-        CategoryItem(id: "general", title: "常规", iconName: "macwindow.on.rectangle", iconColor: .systemBlue),
-        CategoryItem(id: "habits", title: "使用习惯", iconName: "gearshape", iconColor: .systemGray),
-        CategoryItem(id: "permissions", title: "权限", iconName: "checkmark.shield.fill", iconColor: .systemGreen),
-        CategoryItem(id: "search", title: "搜索", iconName: "magnifyingglass", iconColor: .systemOrange),
-        CategoryItem(id: "contextMenu", title: "右键菜单", iconName: "filemenu.and.selection", iconColor: .systemIndigo),
-        CategoryItem(id: "newFile", title: "新建文件", iconName: "doc.badge.plus", iconColor: .systemGreen),
-        CategoryItem(id: "shortcuts", title: "快捷键", iconName: "command", iconColor: .systemPurple),
-        CategoryItem(id: "about", title: "版本", iconName: "info.circle.fill", iconColor: .systemPurple)
-    ]
+    private var categories: [CategoryItem] {
+        [
+            CategoryItem(id: "general", title: "常规".localized, iconName: "macwindow.on.rectangle", iconColor: .systemBlue),
+            CategoryItem(id: "habits", title: "使用习惯".localized, iconName: "gearshape", iconColor: .systemGray),
+            CategoryItem(id: "permissions", title: "权限".localized, iconName: "checkmark.shield.fill", iconColor: .systemGreen),
+            CategoryItem(id: "search", title: "搜索".localized, iconName: "magnifyingglass", iconColor: .systemOrange),
+            CategoryItem(id: "contextMenu", title: "右键菜单".localized, iconName: "filemenu.and.selection", iconColor: .systemIndigo),
+            CategoryItem(id: "newFile", title: "新建文件".localized, iconName: "doc.badge.plus", iconColor: .systemGreen),
+            CategoryItem(id: "shortcuts", title: "快捷键".localized, iconName: "command", iconColor: .systemPurple),
+            CategoryItem(id: "about", title: "版本".localized, iconName: "info.circle.fill", iconColor: .systemPurple)
+        ]
+    }
 
     struct PermissionTarget {
         let id: String
@@ -69,12 +71,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let isFullDisk: Bool
     }
 
-    private lazy var targets: [PermissionTarget] = {
+    private var targets: [PermissionTarget] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return [
             PermissionTarget(
                 id: "desktop",
-                title: "桌面文件夹 (Desktop)",
+                title: "桌面文件夹 (Desktop)".localized,
                 subtitle: "~/Desktop",
                 url: home.appendingPathComponent("Desktop"),
                 tccService: "SystemPolicyDesktopFolder",
@@ -82,7 +84,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             ),
             PermissionTarget(
                 id: "documents",
-                title: "文稿文件夹 (Documents)",
+                title: "文稿文件夹 (Documents)".localized,
                 subtitle: "~/Documents",
                 url: home.appendingPathComponent("Documents"),
                 tccService: "SystemPolicyDocumentsFolder",
@@ -90,7 +92,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             ),
             PermissionTarget(
                 id: "downloads",
-                title: "下载文件夹 (Downloads)",
+                title: "下载文件夹 (Downloads)".localized,
                 subtitle: "~/Downloads",
                 url: home.appendingPathComponent("Downloads"),
                 tccService: "SystemPolicyDownloadsFolder",
@@ -98,14 +100,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             ),
             PermissionTarget(
                 id: "fulldisk",
-                title: "完全磁盘访问权限 (Full Disk Access)",
-                subtitle: "允许全局搜索访问受保护目录而无需逐个弹窗",
+                title: "完全磁盘访问权限 (Full Disk Access)".localized,
+                subtitle: "允许全局搜索访问受保护目录而无需逐个弹窗".localized,
                 url: home.appendingPathComponent("Library/Safari"),
                 tccService: "SystemPolicyAllFiles",
                 isFullDisk: true
             )
         ]
-    }()
+    }
 
     override init() {
         let rect = NSRect(x: 0, y: 0, width: 760, height: 570)
@@ -116,7 +118,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             defer: false
         )
         super.init()
-        window.title = "设置"
+        window.title = "设置".localized
         window.isReleasedWhenClosed = false
         window.delegate = self
         buildUI()
@@ -126,6 +128,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         NotificationCenter.default.addObserver(forName: .sidebarIconSizeDidChange, object: nil, queue: .main) { [weak self] _ in
             self?.syncDisplayControls()
         }
+        NotificationCenter.default.addObserver(forName: .languageDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.handleLanguageDidChange()
+        }
+    }
+
+    private func handleLanguageDidChange() {
+        window.title = "设置".localized
+        let selectedRow = sidebarTable.selectedRow
+        let currentId = (selectedRow >= 0 && selectedRow < categories.count) ? categories[selectedRow].id : "general"
+        categoryViews.removeAll()
+        sidebarTable.reloadData()
+        if selectedRow >= 0 && selectedRow < categories.count {
+            sidebarTable.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
+        }
+        showCategory(id: currentId)
+        syncDisplayControls()
     }
 
     func show(relativeTo parentWindow: NSWindow?) {
@@ -338,79 +356,87 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let labelWidth: CGFloat = 100
 
         // 外观：跟随系统 / 浅色 / 深色（单选按钮组）
-        let radioSys = NSButton(radioButtonWithTitle: "跟随系统", target: self, action: #selector(appearanceRadioSelected(_:)))
-        let radioLight = NSButton(radioButtonWithTitle: "浅色", target: self, action: #selector(appearanceRadioSelected(_:)))
-        let radioDark = NSButton(radioButtonWithTitle: "深色", target: self, action: #selector(appearanceRadioSelected(_:)))
+        let radioSys = NSButton(radioButtonWithTitle: "跟随系统".localized, target: self, action: #selector(appearanceRadioSelected(_:)))
+        let radioLight = NSButton(radioButtonWithTitle: "浅色".localized, target: self, action: #selector(appearanceRadioSelected(_:)))
+        let radioDark = NSButton(radioButtonWithTitle: "深色".localized, target: self, action: #selector(appearanceRadioSelected(_:)))
         appearanceRadios = [radioSys, radioLight, radioDark]
-        let appearanceGroup = makeControlRow(label: "外观：", labelWidth: labelWidth, views: appearanceRadios)
+        let appearanceGroup = makeControlRow(label: "外观：".localized, labelWidth: labelWidth, views: appearanceRadios)
         stack.addArrangedSubview(appearanceGroup)
 
         // 界面语言：跟随系统 / 简体中文 / English / 繁體中文 / 日本語
-        let langSys = NSButton(radioButtonWithTitle: "跟随系统", target: self, action: #selector(languageRadioSelected(_:)))
+        let langSys = NSButton(radioButtonWithTitle: "跟随系统".localized, target: self, action: #selector(languageRadioSelected(_:)))
         let langZh = NSButton(radioButtonWithTitle: "简体中文", target: self, action: #selector(languageRadioSelected(_:)))
         let langEn = NSButton(radioButtonWithTitle: "English", target: self, action: #selector(languageRadioSelected(_:)))
         let langZht = NSButton(radioButtonWithTitle: "繁體中文", target: self, action: #selector(languageRadioSelected(_:)))
         let langJa = NSButton(radioButtonWithTitle: "日本語", target: self, action: #selector(languageRadioSelected(_:)))
         languageRadios = [langSys, langZh, langEn, langZht, langJa]
-        let languageGroup = makeControlRow(label: "语言：", labelWidth: labelWidth, views: languageRadios)
+        let languageGroup = makeControlRow(label: "语言：".localized, labelWidth: labelWidth, views: languageRadios)
         stack.addArrangedSubview(languageGroup)
 
         // 边栏图标大小：小 / 中 / 大
-        let iconSmall = NSButton(radioButtonWithTitle: "小", target: self, action: #selector(sidebarIconRadioSelected(_:)))
-        let iconMedium = NSButton(radioButtonWithTitle: "中", target: self, action: #selector(sidebarIconRadioSelected(_:)))
-        let iconLarge = NSButton(radioButtonWithTitle: "大", target: self, action: #selector(sidebarIconRadioSelected(_:)))
+        let iconSmall = NSButton(radioButtonWithTitle: "小".localized, target: self, action: #selector(sidebarIconRadioSelected(_:)))
+        let iconMedium = NSButton(radioButtonWithTitle: "中".localized, target: self, action: #selector(sidebarIconRadioSelected(_:)))
+        let iconLarge = NSButton(radioButtonWithTitle: "大".localized, target: self, action: #selector(sidebarIconRadioSelected(_:)))
         sidebarIconRadios = [iconSmall, iconMedium, iconLarge]
-        let sidebarIconGroup = makeControlRow(label: "边栏图标大小：", labelWidth: labelWidth, views: sidebarIconRadios)
+        let sidebarIconGroup = makeControlRow(label: "边栏图标大小：".localized, labelWidth: labelWidth, views: sidebarIconRadios)
         stack.addArrangedSubview(sidebarIconGroup)
 
         // 边栏图标风格：彩色图标 / 分区彩色 / 简约图标
-        let styleColorful = NSButton(radioButtonWithTitle: "彩色图标", target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
-        let styleCategory = NSButton(radioButtonWithTitle: "分区彩色", target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
-        let styleMinimalist = NSButton(radioButtonWithTitle: "简约图标", target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
+        let styleColorful = NSButton(radioButtonWithTitle: "彩色图标".localized, target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
+        let styleCategory = NSButton(radioButtonWithTitle: "分区彩色".localized, target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
+        let styleMinimalist = NSButton(radioButtonWithTitle: "简约图标".localized, target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
         sidebarIconStyleRadios = [styleColorful, styleCategory, styleMinimalist]
-        let sidebarStyleGroup = makeControlRow(label: "边栏图标风格：", labelWidth: labelWidth, views: sidebarIconStyleRadios)
+        let sidebarStyleGroup = makeControlRow(label: "边栏图标风格：".localized, labelWidth: labelWidth, views: sidebarIconStyleRadios)
         stack.addArrangedSubview(sidebarStyleGroup)
 
         // 当前窗格：[x] 显示边框   [x] 高亮地址栏   [x] 圆角
+        showPaneBorderCheckbox.title = "显示边框".localized
         showPaneBorderCheckbox.target = self
         showPaneBorderCheckbox.action = #selector(paneOptionToggled)
+        highlightPaneAddressBarCheckbox.title = "高亮地址栏".localized
         highlightPaneAddressBarCheckbox.target = self
         highlightPaneAddressBarCheckbox.action = #selector(paneOptionToggled)
+        keepPaneCornerRadiusCheckbox.title = "圆角".localized
         keepPaneCornerRadiusCheckbox.target = self
         keepPaneCornerRadiusCheckbox.action = #selector(paneOptionToggled)
-        let paneRow = makeControlRow(label: "当前窗格：", labelWidth: labelWidth, views: [
+        let paneRow = makeControlRow(label: "当前窗格：".localized, labelWidth: labelWidth, views: [
             showPaneBorderCheckbox, highlightPaneAddressBarCheckbox, keepPaneCornerRadiusCheckbox
         ])
         stack.addArrangedSubview(paneRow)
 
         // 侧边预览：[x] 显示项目信息
+        showItemInfoCheckbox.title = "显示项目信息".localized
         showItemInfoCheckbox.target = self
         showItemInfoCheckbox.action = #selector(itemInfoToggled)
-        let previewRow = makeControlRow(label: "侧边预览：", labelWidth: labelWidth, views: [showItemInfoCheckbox])
+        let previewRow = makeControlRow(label: "侧边预览：".localized, labelWidth: labelWidth, views: [showItemInfoCheckbox])
         stack.addArrangedSubview(previewRow)
 
         // 底部状态栏：[ ] 默认隐藏
+        hideBottomStatusBarCheckbox.title = "默认隐藏".localized
         hideBottomStatusBarCheckbox.target = self
         hideBottomStatusBarCheckbox.action = #selector(bottomStatusBarToggled)
-        let statusRow = makeControlRow(label: "底部状态栏：", labelWidth: labelWidth, views: [hideBottomStatusBarCheckbox])
+        let statusRow = makeControlRow(label: "底部状态栏：".localized, labelWidth: labelWidth, views: [hideBottomStatusBarCheckbox])
         stack.addArrangedSubview(statusRow)
 
         // 计算所有大小：[ ] 计算并显示文件夹大小
+        calculateFolderSizesCheckbox.title = "计算并显示文件夹大小".localized
         calculateFolderSizesCheckbox.target = self
         calculateFolderSizesCheckbox.action = #selector(calcSizeToggled)
-        let calcRow = makeControlRow(label: "计算所有大小：", labelWidth: labelWidth, views: [calculateFolderSizesCheckbox])
+        let calcRow = makeControlRow(label: "计算所有大小：".localized, labelWidth: labelWidth, views: [calculateFolderSizesCheckbox])
         stack.addArrangedSubview(calcRow)
 
         // 隐藏文件：[x] 显示以点开头的隐藏文件
+        hiddenCheckbox.title = "显示以点（.）开头的隐藏文件（快捷键 ⌘⇧.）".localized
         hiddenCheckbox.target = self
         hiddenCheckbox.action = #selector(hiddenToggled)
-        let hiddenRow = makeControlRow(label: "隐藏文件：", labelWidth: labelWidth, views: [hiddenCheckbox])
+        let hiddenRow = makeControlRow(label: "隐藏文件：".localized, labelWidth: labelWidth, views: [hiddenCheckbox])
         stack.addArrangedSubview(hiddenRow)
 
         // 斑马线底色：[x] 在列表视图中显示交替行底色
+        zebraCheckbox.title = "在列表视图中显示交替行底色（斑马线）".localized
         zebraCheckbox.target = self
         zebraCheckbox.action = #selector(zebraToggled)
-        let zebraRow = makeControlRow(label: "斑马线底色：", labelWidth: labelWidth, views: [zebraCheckbox])
+        let zebraRow = makeControlRow(label: "斑马线底色：".localized, labelWidth: labelWidth, views: [zebraCheckbox])
         stack.addArrangedSubview(zebraRow)
 
         // 分隔线
@@ -422,7 +448,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         // 图标视图尺寸
         let iconSliderRow = makeSliderRow(
-            label: "网格图标尺寸：",
+            label: "网格图标尺寸：".localized,
             labelWidth: labelWidth,
             slider: iconSizeSlider,
             valueLabel: iconSizeValueLabel,
@@ -434,7 +460,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         // 列表视图行高
         let listSliderRow = makeSliderRow(
-            label: "列表视图行高：",
+            label: "列表视图行高：".localized,
             labelWidth: labelWidth,
             slider: rowHeightSlider,
             valueLabel: rowHeightValueLabel,
@@ -480,8 +506,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         content.addSubview(stack)
 
         let permSection = makeCardSection(
-            title: "文件夹与搜索权限管理",
-            subtitle: "若您在系统权限弹窗中误点了「不允许」，点击下方「重置并重新请求权限」即可清除拒绝记录并立即重新弹出系统授权框。"
+            title: "文件夹与搜索权限管理".localized,
+            subtitle: "若您在系统权限弹窗中误点了「不允许」，点击下方「重置并重新请求权限」即可清除拒绝记录并立即重新弹出系统授权框。".localized
         )
 
         let rowsStack = NSStackView()
@@ -506,14 +532,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         actionBar.alignment = .centerY
         actionBar.spacing = 8
 
-        let resetAllBtn = NSButton(title: "重置并重新弹出授权框", target: self, action: #selector(resetAndRepromptAllPermissions))
+        let resetAllBtn = NSButton(title: "重置并重新弹出授权框".localized, target: self, action: #selector(resetAndRepromptAllPermissions))
         resetAllBtn.bezelStyle = .rounded
         resetAllBtn.keyEquivalent = "\r"
 
-        let openFilesPrivacyBtn = NSButton(title: "系统设置：文件与文件夹", target: self, action: #selector(openFilesAndFoldersPrivacy))
+        let openFilesPrivacyBtn = NSButton(title: "系统设置：文件与文件夹".localized, target: self, action: #selector(openFilesAndFoldersPrivacy))
         openFilesPrivacyBtn.bezelStyle = .rounded
 
-        let openFullDiskBtn = NSButton(title: "系统设置：完全磁盘访问", target: self, action: #selector(openFullDiskAccessPrivacy))
+        let openFullDiskBtn = NSButton(title: "系统设置：完全磁盘访问".localized, target: self, action: #selector(openFullDiskAccessPrivacy))
         openFullDiskBtn.bezelStyle = .rounded
 
         actionBar.addArrangedSubview(resetAllBtn)
@@ -523,7 +549,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         statusBanner.font = .systemFont(ofSize: 11.5)
         statusBanner.textColor = .secondaryLabelColor
-        statusBanner.stringValue = "提示：重置权限后，系统会依次弹出“桌面”、“文稿”、“下载”访问请求，请点击「允许」。"
+        statusBanner.stringValue = "提示：重置权限后，系统会依次弹出“桌面”、“文稿”、“下载”访问请求，请点击「允许」。".localized
         permSection.contentStack.addArrangedSubview(statusBanner)
 
         stack.addArrangedSubview(permSection.container)
@@ -566,8 +592,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         content.addSubview(stack)
 
         let searchSection = makeCardSection(
-            title: "全局搜索引擎",
-            subtitle: "Maple 内置高并发常驻内存索引，支持秒级全盘文件名模糊匹配。在重新授予文件夹权限后，点击右侧按钮即可立即更新索引。"
+            title: "全局搜索引擎".localized,
+            subtitle: "Maple 内置高并发常驻内存索引，支持秒级全盘文件名模糊匹配。在重新授予文件夹权限后，点击右侧按钮即可立即更新索引。".localized
         )
 
         let searchRow = NSStackView()
@@ -590,12 +616,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         indexInfoStack.addArrangedSubview(indexStatusLabel)
         indexInfoStack.addArrangedSubview(indexSizeLabel)
 
-        revealCacheButton.title = "在访达中显示"
+        revealCacheButton.title = "在访达中显示".localized
         revealCacheButton.bezelStyle = .rounded
         revealCacheButton.target = self
         revealCacheButton.action = #selector(revealCacheFileAction)
 
-        rebuildIndexButton.title = "立即重建搜索索引"
+        rebuildIndexButton.title = "立即重建搜索索引".localized
         rebuildIndexButton.bezelStyle = .rounded
         rebuildIndexButton.target = self
         rebuildIndexButton.action = #selector(rebuildSearchIndexAction)
@@ -605,7 +631,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         searchRow.addArrangedSubview(rebuildIndexButton)
         searchSection.contentStack.addArrangedSubview(searchRow)
 
-        let tipsField = NSTextField(wrappingLabelWithString: "搜索显示与快捷键：\n• 快捷键 ⇧⌘F：全局搜索（范围为「此 Mac」）\n• 快捷键 ⌘F：在当前位置搜索（范围限定在当前所在文件夹内）\n• 搜索结果默认以扁平列表展示直接命中项，右下角提供统一尺寸调节滑块")
+        let tipsField = NSTextField(wrappingLabelWithString: "搜索显示与快捷键：\n• 快捷键 ⇧⌘F：全局搜索（范围为「此 Mac」）\n• 快捷键 ⌘F：在当前位置搜索（范围限定在当前所在文件夹内）\n• 搜索结果默认以扁平列表展示直接命中项，右下角提供统一尺寸调节滑块".localized)
         tipsField.font = .systemFont(ofSize: 12)
         tipsField.textColor = .secondaryLabelColor
         searchSection.contentStack.addArrangedSubview(tipsField)
@@ -641,19 +667,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         stack.spacing = 14
         content.addSubview(stack)
 
-        let section = makeCardSection(title: "操作与交互习惯", subtitle: "定制符合您日常工作流的文件管理习惯。")
+        let section = makeCardSection(title: "操作与交互习惯".localized, subtitle: "定制符合您日常工作流的文件管理习惯。".localized)
 
-        let soundCheck = NSButton(checkboxWithTitle: "移到废纸篓时播放碎纸音效（与系统访达一致）", target: nil, action: nil)
+        let soundCheck = NSButton(checkboxWithTitle: "移到废纸篓时播放碎纸音效（与系统访达一致）".localized, target: nil, action: nil)
         soundCheck.state = .on
         soundCheck.isEnabled = false
         section.contentStack.addArrangedSubview(soundCheck)
 
-        let undoCheck = NSButton(checkboxWithTitle: "支持 Windows 习惯的 Ctrl+Z / Ctrl+Shift+Z 文本撤销与重做", target: nil, action: nil)
+        let undoCheck = NSButton(checkboxWithTitle: "支持 Windows 习惯的 Ctrl+Z / Ctrl+Shift+Z 文本撤销与重做".localized, target: nil, action: nil)
         undoCheck.state = .on
         undoCheck.isEnabled = false
         section.contentStack.addArrangedSubview(undoCheck)
 
-        let closeWindowCheck = NSButton(checkboxWithTitle: "⌘W 仅关闭当前窗口，应用在后台与 Dock 栏继续运行", target: nil, action: nil)
+        let closeWindowCheck = NSButton(checkboxWithTitle: "⌘W 仅关闭当前窗口，应用在后台与 Dock 栏继续运行".localized, target: nil, action: nil)
         closeWindowCheck.state = .on
         closeWindowCheck.isEnabled = false
         section.contentStack.addArrangedSubview(closeWindowCheck)
@@ -688,7 +714,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         stack.spacing = 14
         content.addSubview(stack)
 
-        let section = makeCardSection(title: "Maple 核心快捷键一览", subtitle: "支持标准 macOS 快捷键及 Windows 习惯键位。")
+        let section = makeCardSection(title: "Maple 核心快捷键一览".localized, subtitle: "支持标准 macOS 快捷键及 Windows 习惯键位。".localized)
 
         let shortcuts: [(key: String, desc: String)] = [
             ("⌘N", "新建主窗口"),
@@ -716,7 +742,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             kLabel.textColor = .controlAccentColor
             kLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
 
-            let dLabel = NSTextField(labelWithString: s.desc)
+            let dLabel = NSTextField(labelWithString: s.desc.localized)
             dLabel.font = .systemFont(ofSize: 12.5)
             dLabel.textColor = .labelColor
 
@@ -753,9 +779,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         stack.spacing = 14
         content.addSubview(stack)
 
-        let section = makeCardSection(title: "右键菜单定制", subtitle: "配置在文件与目录上右键时弹出的常用快捷操作。")
+        let section = makeCardSection(title: "右键菜单定制".localized, subtitle: "配置在文件与目录上右键时弹出的常用快捷操作。".localized)
 
-        let items = ["拷贝路径 (⌥⌘C)", "在终端中打开 (⌥⌘T)", "在 Finder 中显示 (⇧⌘R)", "重命名", "移到废纸篓 (⌘⌫)"]
+        let items = ["拷贝路径 (⌥⌘C)".localized, "在终端中打开 (⌥⌘T)".localized, "在 Finder 中显示 (⇧⌘R)".localized, "重命名".localized, "移到废纸篓 (⌘⌫)".localized]
         for item in items {
             let check = NSButton(checkboxWithTitle: item, target: nil, action: nil)
             check.state = .on
@@ -784,9 +810,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         stack.spacing = 14
         content.addSubview(stack)
 
-        let section = makeCardSection(title: "新建文件模板", subtitle: "快速在空白区域创建各种类型的新文件。")
+        let section = makeCardSection(title: "新建文件模板".localized, subtitle: "快速在空白区域创建各种类型的新文件。".localized)
 
-        let templates = ["新建文件夹（快捷键 ⇧⌘N）", "新建文本文档 (.txt)", "新建 Markdown 笔记 (.md)", "新建空白代码文件"]
+        let templates = ["新建文件夹（快捷键 ⇧⌘N）".localized, "新建文本文档 (.txt)".localized, "新建 Markdown 笔记 (.md)".localized, "新建空白代码文件".localized]
         for t in templates {
             let check = NSButton(checkboxWithTitle: t, target: nil, action: nil)
             check.state = .on
@@ -823,34 +849,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         iconView.heightAnchor.constraint(equalToConstant: 96).isActive = true
         stack.addArrangedSubview(iconView)
 
-        let nameLabel = NSTextField(labelWithString: "Maple 枫叶文件管理器")
+        let nameLabel = NSTextField(labelWithString: "Maple 枫叶文件管理器".localized)
         nameLabel.font = .systemFont(ofSize: 18, weight: .bold)
         stack.addArrangedSubview(nameLabel)
 
         let ver = UpdateChecker.currentVersion
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "2026.11"
-        let verLabel = NSTextField(labelWithString: "版本 \(ver) (Build \(build))")
+        let verLabel = NSTextField(labelWithString: "\("版本".localized) \(ver) (Build \(build))")
         verLabel.font = .systemFont(ofSize: 12.5)
         verLabel.textColor = .secondaryLabelColor
         stack.addArrangedSubview(verLabel)
 
         #if arch(arm64)
-        let archText = "Apple Silicon (arm64) 原生架构"
+        let archText = "Apple Silicon (arm64) 原生架构".localized
         #else
-        let archText = "Intel (x86_64) 原生架构"
+        let archText = "Intel (x86_64) 原生架构".localized
         #endif
-        let archLabel = NSTextField(labelWithString: "系统架构：\(archText)")
+        let archLabel = NSTextField(labelWithString: "\("系统架构：".localized)\(archText)")
         archLabel.font = .systemFont(ofSize: 11.5)
         archLabel.textColor = .tertiaryLabelColor
         stack.addArrangedSubview(archLabel)
 
-        let descLabel = NSTextField(wrappingLabelWithString: "Maple 是一款专为 macOS 设计的极速、轻量、多窗格文件管理器。\n纯原生 Swift + AppKit 开发，极致性能，丝滑流畅。")
+        let descLabel = NSTextField(wrappingLabelWithString: "Maple 是一款专为 macOS 设计的极速、轻量、多窗格文件管理器。\n纯原生 Swift + AppKit 开发，极致性能，丝滑流畅。".localized)
         descLabel.alignment = .center
         descLabel.font = .systemFont(ofSize: 12)
         descLabel.textColor = .secondaryLabelColor
         stack.addArrangedSubview(descLabel)
 
-        let updateButton = NSButton(title: "检查更新…", target: self, action: #selector(checkForUpdatesClicked(_:)))
+        let updateButton = NSButton(title: "检查更新…".localized, target: self, action: #selector(checkForUpdatesClicked(_:)))
         updateButton.bezelStyle = .rounded
         updateButton.font = .systemFont(ofSize: 12)
         stack.addArrangedSubview(updateButton)
@@ -866,11 +892,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     @objc private func checkForUpdatesClicked(_ sender: NSButton) {
         sender.isEnabled = false
-        sender.title = "正在检查更新…"
+        sender.title = "正在检查更新…".localized
         UpdateChecker.shared.checkForUpdates(isUserInitiated: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak sender] in
             sender?.isEnabled = true
-            sender?.title = "检查更新…"
+            sender?.title = "检查更新…".localized
         }
     }
 
@@ -889,7 +915,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         title.font = .systemFont(ofSize: 16, weight: .semibold)
         title.textColor = .labelColor
 
-        let subtitle = NSTextField(labelWithString: "该分类功能已在默认最佳配置下运行。")
+        let subtitle = NSTextField(labelWithString: "该分类功能已在默认最佳配置下运行。".localized)
         subtitle.font = .systemFont(ofSize: 12.5)
         subtitle.textColor = .secondaryLabelColor
 
@@ -1043,11 +1069,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
                 let granted = self.checkAccess(for: target)
                 if granted {
                     self.statusBanner.textColor = .systemGreen
-                    self.statusBanner.stringValue = "✓「\(target.title)」权限已成功开启！正在更新搜索索引…"
+                    self.statusBanner.stringValue = "\("✓ 已成功开启！正在更新搜索索引…".localized)"
                     self.rebuildSearchIndexAction()
                 } else {
                     self.statusBanner.textColor = .systemOrange
-                    self.statusBanner.stringValue = "若系统未弹出询问框，请点击「系统设置：文件与文件夹」手动勾选开启。"
+                    self.statusBanner.stringValue = "若系统未弹出询问框，请点击「系统设置：文件与文件夹」手动勾选开启。".localized
                 }
             }
         }
@@ -1055,7 +1081,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     @objc private func resetAndRepromptAllPermissions() {
         statusBanner.textColor = .controlAccentColor
-        statusBanner.stringValue = "正在重置权限记录并请求系统重新弹窗…"
+        statusBanner.stringValue = "正在重置权限记录并请求系统重新弹窗…".localized
 
         resetTCC(service: "All")
         resetTCC(service: "SystemPolicyDesktopFolder")
@@ -1073,7 +1099,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
                 self.onSettingsChanged?()
                 self.rebuildSearchIndexAction()
                 self.statusBanner.textColor = .systemGreen
-                self.statusBanner.stringValue = "✓ 已重置权限并重新请求授权！如果已在弹窗中点击允许，全局搜索将自动更新。"
+                self.statusBanner.stringValue = "✓ 已重置权限并重新请求授权！如果已在弹窗中点击允许，全局搜索将自动更新。".localized
             }
         }
     }
@@ -1117,24 +1143,24 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let count = FileSearchEngine.shared.indexedCount
         let sizeStr = FileSearchEngine.shared.formattedIndexSize
         let formattedCount = NumberFormatter.localizedString(from: NSNumber(value: count), number: .decimal)
-        indexStatusLabel.stringValue = "当前常驻索引：\(formattedCount) 个项目"
-        indexSizeLabel.stringValue = "当前索引大小：\(sizeStr)（高速磁盘缓存）"
+        indexStatusLabel.stringValue = "\("当前常驻索引：".localized)\(formattedCount) \("个项目".localized)"
+        indexSizeLabel.stringValue = "\("当前索引大小：".localized)\(sizeStr)\("（高速磁盘缓存）".localized)"
     }
 
     @objc private func rebuildSearchIndexAction() {
         rebuildIndexButton.isEnabled = false
-        rebuildIndexButton.title = "正在重建索引…"
-        indexStatusLabel.stringValue = "正在扫描已授权目录并重建常驻索引…"
-        indexSizeLabel.stringValue = "正在生成并压缩索引文件…"
+        rebuildIndexButton.title = "正在重建索引…".localized
+        indexStatusLabel.stringValue = "正在扫描已授权目录并重建常驻索引…".localized
+        indexSizeLabel.stringValue = "正在生成并压缩索引文件…".localized
 
         FileSearchEngine.shared.rebuildIndexNow { [weak self] newCount in
             guard let self else { return }
             self.rebuildIndexButton.isEnabled = true
-            self.rebuildIndexButton.title = "立即重建搜索索引"
+            self.rebuildIndexButton.title = "立即重建搜索索引".localized
             let sizeStr = FileSearchEngine.shared.formattedIndexSize
             let formattedCount = NumberFormatter.localizedString(from: NSNumber(value: newCount), number: .decimal)
-            self.indexStatusLabel.stringValue = "当前常驻索引：\(formattedCount) 个项目（已更新）"
-            self.indexSizeLabel.stringValue = "当前索引大小：\(sizeStr)（高速磁盘缓存）"
+            self.indexStatusLabel.stringValue = "\("当前常驻索引：".localized)\(formattedCount) \("个项目（已更新）".localized)"
+            self.indexSizeLabel.stringValue = "\("当前索引大小：".localized)\(sizeStr)\("（高速磁盘缓存）".localized)"
         }
     }
 
@@ -1296,7 +1322,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     }
 }
 
-// MARK: - 极简透明滚动条（无白色/灰色轨道底色，完全融入背景）
+// MARK: - 透明滚动条
 
 private final class SubtleScroller: NSScroller {
     override class var isCompatibleWithOverlayScrollers: Bool {
@@ -1313,7 +1339,7 @@ private final class SubtleScroller: NSScroller {
     }
 }
 
-// MARK: - 设置侧边栏行视图（支持悬浮浅灰、选中深灰反馈与圆角药丸效果）
+// MARK: - 设置侧边栏行视图
 
 private final class CategoryRowView: NSTableRowView {
 
@@ -1388,7 +1414,7 @@ private final class CategoryRowView: NSTableRowView {
     }
 }
 
-// MARK: - 侧边栏行 Cell 视图（高保真图标与标签）
+// MARK: - 侧边栏行 Cell 视图
 
 private final class CategoryCellView: NSTableCellView {
 
@@ -1516,14 +1542,14 @@ private final class PermissionItemRow: NSView {
     func updateStatus(granted: Bool) {
         if granted {
             dotView.layer?.backgroundColor = NSColor.systemGreen.cgColor
-            statusBadge.stringValue = "已授权"
+            statusBadge.stringValue = "已授权".localized
             statusBadge.textColor = .systemGreen
-            actionButton.title = target.isFullDisk ? "查看设置" : "重新检测"
+            actionButton.title = target.isFullDisk ? "查看设置".localized : "重新检测".localized
         } else {
             dotView.layer?.backgroundColor = NSColor.systemOrange.cgColor
-            statusBadge.stringValue = target.isFullDisk ? "未开启（可选）" : "未授权 / 已拒绝"
+            statusBadge.stringValue = target.isFullDisk ? "未开启（可选）".localized : "未授权 / 已拒绝".localized
             statusBadge.textColor = .systemOrange
-            actionButton.title = target.isFullDisk ? "去开启…" : "重新请求授权"
+            actionButton.title = target.isFullDisk ? "去开启…".localized : "重新请求授权".localized
         }
     }
 

@@ -320,7 +320,7 @@ final class PathBar: NSView {
         }
         if let badge {
             crumbs = []
-            toolTip = "标签：" + badge.title
+            toolTip = "标签：".localized + badge.title
             editor.stringValue = ""
             starButton.isOn = false
             starButton.isHidden = true
@@ -373,7 +373,7 @@ final class PathBar: NSView {
 
     private func displayName(forPath path: String) -> String {
         if path.hasSuffix("/com~apple~CloudDocs") {
-            return "iCloud 云盘"
+            return "iCloud 云盘".localized
         }
         if path.hasSuffix("/.Trash") || path.hasSuffix("/Trash") {
             return "废纸篓".localized

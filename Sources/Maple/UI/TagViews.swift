@@ -172,7 +172,7 @@ final class TagMoreButton: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        toolTip = "更多标签…"
+        toolTip = "更多标签…".localized
     }
 
     required init?(coder: NSCoder) {
@@ -1271,7 +1271,7 @@ final class AllTagsBrowserColumnView: NSView, NSTableViewDataSource, NSTableView
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let openItem = NSMenuItem(title: "在新标签页中打开", action: #selector(ctxOpenTag(_:)), keyEquivalent: "")
+        let openItem = NSMenuItem(title: "在新标签页中打开".localized, action: #selector(ctxOpenTag(_:)), keyEquivalent: "")
         openItem.target = self
         openItem.representedObject = tagName
         menu.addItem(openItem)
@@ -1279,12 +1279,12 @@ final class AllTagsBrowserColumnView: NSView, NSTableViewDataSource, NSTableView
         menu.addItem(.separator())
 
         if Tags.isTagInSidebar(named: tagName) {
-            let hideItem = NSMenuItem(title: "从边栏中移除", action: #selector(ctxHideFromSidebar(_:)), keyEquivalent: "")
+            let hideItem = NSMenuItem(title: "从边栏中移除".localized, action: #selector(ctxHideFromSidebar(_:)), keyEquivalent: "")
             hideItem.target = self
             hideItem.representedObject = tagName
             menu.addItem(hideItem)
         } else {
-            let showItem = NSMenuItem(title: "在边栏中显示", action: #selector(ctxShowInSidebar(_:)), keyEquivalent: "")
+            let showItem = NSMenuItem(title: "在边栏中显示".localized, action: #selector(ctxShowInSidebar(_:)), keyEquivalent: "")
             showItem.target = self
             showItem.representedObject = tagName
             menu.addItem(showItem)
@@ -1305,7 +1305,7 @@ final class AllTagsBrowserColumnView: NSView, NSTableViewDataSource, NSTableView
         menu.addItem(.separator())
 
         let currentColorKey = tagDef.colorKey
-        let noneItem = NSMenuItem(title: "无颜色", action: #selector(ctxPickColor(_:)), keyEquivalent: "")
+        let noneItem = NSMenuItem(title: "无颜色".localized, action: #selector(ctxPickColor(_:)), keyEquivalent: "")
         noneItem.target = self
         noneItem.representedObject = (tagName: tagName, colorKey: "none")
         noneItem.image = Tags.paletteIcon(color: nil)

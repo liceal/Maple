@@ -889,19 +889,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let newFolder = NSMenuItem(title: "新建文件夹", action: #selector(newFolderAction), keyEquivalent: "")
+        let newFolder = NSMenuItem(title: "新建文件夹".localized, action: #selector(newFolderAction), keyEquivalent: "")
         newFolder.target = self
         newFolder.isEnabled = !pane.isTagView
         menu.addItem(newFolder)
 
-        let openOther = NSMenuItem(title: "在新窗格中打开", action: #selector(openSelectionInOtherPane), keyEquivalent: "")
+        let openOther = NSMenuItem(title: "在新窗格中打开".localized, action: #selector(openSelectionInOtherPane), keyEquivalent: "")
         openOther.target = self
         openOther.isEnabled = (workspace?.panes.count ?? 1) > 1
         menu.addItem(openOther)
 
         menu.addItem(.separator())
 
-        let info = NSMenuItem(title: "显示简介", action: #selector(infoAction), keyEquivalent: "")
+        let info = NSMenuItem(title: "显示简介".localized, action: #selector(infoAction), keyEquivalent: "")
         info.target = self
         menu.addItem(info)
 
@@ -915,7 +915,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(.separator())
 
-        let groupItem = NSMenuItem(title: "使用群组", action: nil, keyEquivalent: "")
+        let groupItem = NSMenuItem(title: "使用群组".localized, action: nil, keyEquivalent: "")
         let groupMenu = NSMenu()
         groupMenu.autoenablesItems = false
         for mode in GroupMode.allCases {
@@ -928,7 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         groupItem.submenu = groupMenu
         menu.addItem(groupItem)
 
-        let sortItem = NSMenuItem(title: "排序方式", action: nil, keyEquivalent: "")
+        let sortItem = NSMenuItem(title: "排序方式".localized, action: nil, keyEquivalent: "")
         let sortMenu = NSMenu()
         sortMenu.autoenablesItems = false
         for field in SortField.allCases {
@@ -939,12 +939,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             sortMenu.addItem(item)
         }
         sortMenu.addItem(.separator())
-        let asc = NSMenuItem(title: "升序", action: #selector(orderPicked(_:)), keyEquivalent: "")
+        let asc = NSMenuItem(title: "升序".localized, action: #selector(orderPicked(_:)), keyEquivalent: "")
         asc.target = self
         asc.representedObject = "asc"
         asc.state = pane.ascending ? .on : .off
         sortMenu.addItem(asc)
-        let desc = NSMenuItem(title: "降序", action: #selector(orderPicked(_:)), keyEquivalent: "")
+        let desc = NSMenuItem(title: "降序".localized, action: #selector(orderPicked(_:)), keyEquivalent: "")
         desc.target = self
         desc.representedObject = "desc"
         desc.state = pane.ascending ? .off : .on
@@ -952,15 +952,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sortItem.submenu = sortMenu
         menu.addItem(sortItem)
 
-        let options = NSMenuItem(title: "查看显示选项…", action: #selector(showDisplayOptionsAction), keyEquivalent: "")
+        let options = NSMenuItem(title: "查看显示选项…".localized, action: #selector(showDisplayOptionsAction), keyEquivalent: "")
         options.target = self
         menu.addItem(options)
 
-        let settingsItem = NSMenuItem(title: "设置与权限管理…", action: #selector(showSettingsAction), keyEquivalent: "")
+        let settingsItem = NSMenuItem(title: "设置与权限管理…".localized, action: #selector(showSettingsAction), keyEquivalent: "")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
-        let connectServerItem = NSMenuItem(title: "连接服务器…", action: #selector(connectServerAction), keyEquivalent: "")
+        let connectServerItem = NSMenuItem(title: "连接服务器…".localized, action: #selector(connectServerAction), keyEquivalent: "")
         connectServerItem.target = self
         menu.addItem(connectServerItem)
 
@@ -970,19 +970,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(.separator())
 
-        let hidden = NSMenuItem(title: AppSettings.showHidden ? "隐藏隐藏文件" : "显示隐藏文件",
+        let hidden = NSMenuItem(title: AppSettings.showHidden ? "隐藏隐藏文件".localized : "显示隐藏文件".localized,
                                 action: #selector(toggleHiddenAction),
                                 keyEquivalent: "")
         hidden.target = self
         menu.addItem(hidden)
 
-        let refresh = NSMenuItem(title: "刷新", action: #selector(refreshAction), keyEquivalent: "")
+        let refresh = NSMenuItem(title: "刷新".localized, action: #selector(refreshAction), keyEquivalent: "")
         refresh.target = self
         menu.addItem(refresh)
 
         menu.addItem(.separator())
 
-        let layoutItem = NSMenuItem(title: "布局", action: nil, keyEquivalent: "")
+        let layoutItem = NSMenuItem(title: "布局".localized, action: nil, keyEquivalent: "")
         let layoutMenu = NSMenu()
         layoutMenu.autoenablesItems = false
         for mode in LayoutMode.allCases {
@@ -1070,12 +1070,12 @@ final class ToolbarNavView: NSView {
         backButton.image = Theme.symbol("chevron.left", size: 15, weight: .semibold)
         backButton.target = self
         backButton.action = #selector(backTapped)
-        backButton.toolTip = "后退"
+        backButton.toolTip = "后退".localized
 
         forwardButton.image = Theme.symbol("chevron.right", size: 15, weight: .semibold)
         forwardButton.target = self
         forwardButton.action = #selector(forwardTapped)
-        forwardButton.toolTip = "前进"
+        forwardButton.toolTip = "前进".localized
 
         titleLabel.font = .systemFont(ofSize: 14.5, weight: .semibold)
         titleLabel.textColor = .labelColor

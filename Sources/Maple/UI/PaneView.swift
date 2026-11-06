@@ -1482,7 +1482,7 @@ final class PaneView: NSView {
         groupItem.submenu = groupMenu
         menu.addItem(groupItem)
 
-        let sortItem = NSMenuItem(title: "排序", action: nil, keyEquivalent: "")
+        let sortItem = NSMenuItem(title: "排序".localized, action: nil, keyEquivalent: "")
         let sortMenu = NSMenu()
         sortMenu.autoenablesItems = false
         for field in SortField.allCases {
@@ -2011,11 +2011,11 @@ final class PaneView: NSView {
         }
         if !isDirectory, let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
             let appName = FileManager.default.displayName(atPath: appURL.path)
-            lines.append("打开方式：\(appName)")
+            lines.append("\("打开方式：".localized)\(appName)")
         }
 
         let alert = NSAlert()
-        alert.messageText = "简介"
+        alert.messageText = "简介".localized
         alert.informativeText = lines.joined(separator: "\n")
 
         // 设置为目标文件/目录/应用的真实图标（避免默认显示为 Maple 自身图标）
@@ -2088,7 +2088,7 @@ final class PaneView: NSView {
 
             // 打开方式（仅对单选有效）
             if targetItems.count == 1, let openWithSub = makeOpenWithSubmenu(for: targetItems[0]) {
-                let openWithItem = NSMenuItem(title: "打开方式", action: nil, keyEquivalent: "")
+                let openWithItem = NSMenuItem(title: "打开方式".localized, action: nil, keyEquivalent: "")
                 openWithItem.submenu = openWithSub
                 menu.addItem(openWithItem)
             }
@@ -2202,7 +2202,7 @@ final class PaneView: NSView {
 
     @discardableResult
     private func add(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        let item = NSMenuItem(title: title.localized, action: action, keyEquivalent: "")
         item.target = self
         menu.addItem(item)
         return item
@@ -2211,7 +2211,7 @@ final class PaneView: NSView {
     private func makeOpenWithSubmenu(for item: FileItem) -> NSMenu? {
         let appURLs = NSWorkspace.shared.urlsForApplications(toOpen: item.url)
         guard !appURLs.isEmpty else { return nil }
-        let submenu = NSMenu(title: "打开方式")
+        let submenu = NSMenu(title: "打开方式".localized)
         submenu.autoenablesItems = false
 
         let defaultApp = NSWorkspace.shared.urlForApplication(toOpen: item.url)
@@ -2230,7 +2230,7 @@ final class PaneView: NSView {
         }
 
         submenu.addItem(.separator())
-        let otherItem = NSMenuItem(title: "其他…", action: #selector(openWithOtherAppClicked(_:)), keyEquivalent: "")
+        let otherItem = NSMenuItem(title: "其他…".localized, action: #selector(openWithOtherAppClicked(_:)), keyEquivalent: "")
         otherItem.target = self
         otherItem.representedObject = item.url
         submenu.addItem(otherItem)
