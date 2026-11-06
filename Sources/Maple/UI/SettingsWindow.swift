@@ -120,6 +120,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         window.isReleasedWhenClosed = false
         window.delegate = self
         buildUI()
+        NotificationCenter.default.addObserver(forName: .sidebarIconStyleDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.syncDisplayControls()
+        }
+        NotificationCenter.default.addObserver(forName: .sidebarIconSizeDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.syncDisplayControls()
+        }
     }
 
     func show(relativeTo parentWindow: NSWindow?) {
@@ -357,10 +363,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let sidebarIconGroup = makeControlRow(label: "边栏图标大小：", labelWidth: labelWidth, views: sidebarIconRadios)
         stack.addArrangedSubview(sidebarIconGroup)
 
-        // 边栏图标风格：彩色图标 / 简约图标
+        // 边栏图标风格：彩色图标 / 分区彩色 / 简约图标
         let styleColorful = NSButton(radioButtonWithTitle: "彩色图标", target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
+        let styleCategory = NSButton(radioButtonWithTitle: "分区彩色", target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
         let styleMinimalist = NSButton(radioButtonWithTitle: "简约图标", target: self, action: #selector(sidebarIconStyleRadioSelected(_:)))
-        sidebarIconStyleRadios = [styleColorful, styleMinimalist]
+        sidebarIconStyleRadios = [styleColorful, styleCategory, styleMinimalist]
         let sidebarStyleGroup = makeControlRow(label: "边栏图标风格：", labelWidth: labelWidth, views: sidebarIconStyleRadios)
         stack.addArrangedSubview(sidebarStyleGroup)
 
@@ -1176,7 +1183,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let currentIconStyle = AppSettings.sidebarIconStyle
         for (idx, r) in sidebarIconStyleRadios.enumerated() {
             if idx == 0 && currentIconStyle == .colorful { r.state = .on }
-            else if idx == 1 && currentIconStyle == .minimalist { r.state = .on }
+            else if idx == 1 && currentIconStyle == .category { r.state = .on }
+            else if idx == 2 && currentIconStyle == .minimalist { r.state = .on }
             else { r.state = .off }
         }
 
@@ -1239,6 +1247,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         sidebarIconStyleRadios.forEach { $0.state = ($0 == sender) ? .on : .off }
         if sender == sidebarIconStyleRadios.first {
             AppSettings.sidebarIconStyle = .colorful
+        } else if sidebarIconStyleRadios.count > 1 && sender == sidebarIconStyleRadios[1] {
+            AppSettings.sidebarIconStyle = .category
         } else {
             AppSettings.sidebarIconStyle = .minimalist
         }

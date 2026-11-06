@@ -38,11 +38,13 @@ enum SidebarIconSize: String, CaseIterable {
 
 enum SidebarIconStyle: String, CaseIterable {
     case colorful   = "colorful"
+    case category   = "category"
     case minimalist = "minimalist"
 
     var title: String {
         switch self {
         case .colorful:   return "彩色图标"
+        case .category:   return "分区彩色"
         case .minimalist: return "简约图标"
         }
     }
@@ -85,6 +87,22 @@ enum SidebarCategory: String, CaseIterable {
         case .locations: return "位置".localized
         case .servers:   return "服务器".localized
         case .tags:      return "标签".localized
+        }
+    }
+
+    /// 分区彩色图标风格下，每个大模块对应的专属图标着色（对齐访达并按大模块区分）
+    var iconTintColor: NSColor {
+        switch self {
+        case .favorites:
+            return .systemBlue
+        case .icloud:
+            return NSColor(calibratedRed: 0.0, green: 0.62, blue: 0.73, alpha: 1.0)
+        case .locations:
+            return .systemIndigo
+        case .servers:
+            return .systemOrange
+        case .tags:
+            return .secondaryLabelColor
         }
     }
 }
@@ -239,11 +257,17 @@ enum AppSettings {
         }
     }
 
-    /// 边栏图标风格（彩色图标 / 简约图标）
+    /// 边栏图标风格（彩色图标 / 分区彩色 / 简约图标）
     private static var _sidebarIconStyle: SidebarIconStyle = {
+        let migrationKey = "__migrated_sidebar_category_style_v1"
+        if !store.bool(forKey: migrationKey) {
+            store.set(true, forKey: migrationKey)
+            store.set(SidebarIconStyle.category.rawValue, forKey: "sidebarIconStyle")
+            return .category
+        }
         guard let val = store.string(forKey: "sidebarIconStyle"),
               let style = SidebarIconStyle(rawValue: val) else {
-            return .colorful
+            return .category
         }
         return style
     }()
@@ -650,6 +674,16 @@ enum AppSettings {
 
     static func showAllSidebarCategories() {
         visibleSidebarCategories = SidebarCategory.allCases.map { $0.rawValue }
+    }
+
+    /// 获取侧栏某个大模块内子项的自定义拖拽排序（按标识符存储）
+    static func sidebarSectionOrder(for category: SidebarCategory) -> [String] {
+        store.stringArray(forKey: "sidebarSectionOrder.\(category.rawValue)") ?? []
+    }
+
+    /// 保存侧栏某个大模块内子项的自定义拖拽排序
+    static func setSidebarSectionOrder(_ identifiers: [String], for category: SidebarCategory) {
+        store.set(identifiers, forKey: "sidebarSectionOrder.\(category.rawValue)")
     }
 
     // MARK: - 已保存的远程服务器

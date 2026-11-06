@@ -433,6 +433,24 @@ enum Tags {
         _cachedAll = list
     }
 
+    /// 拖拽重排边栏标签顺序并持久化
+    static func reorderSidebarTags(names: [String]) {
+        let current = all
+        var map: [String: TagDefinition] = [:]
+        for def in current { map[def.name] = def }
+        var reordered: [TagDefinition] = []
+        var seen = Set<String>()
+        for name in names {
+            if let def = map[name], seen.insert(name).inserted {
+                reordered.append(def)
+            }
+        }
+        for def in current where seen.insert(def.name).inserted {
+            reordered.append(def)
+        }
+        save(list: reordered)
+    }
+
     /// 根据标签名取颜色
     static func color(named name: String, on url: URL? = nil) -> NSColor {
         if let found = all.first(where: { $0.name == name }) {
